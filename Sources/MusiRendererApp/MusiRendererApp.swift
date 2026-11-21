@@ -10,7 +10,7 @@ struct MusiRendererApp: App {
         MenuBarExtra {
             StatusView(model: model, openPlayer: { playerWindow.show(model: model) })
         } label: {
-            Label("MusiRenderer", systemImage: "hifispeaker.fill")
+            Label(RendererConfiguration.productName, systemImage: "hifispeaker.fill")
         }
         .menuBarExtraStyle(.window)
 

@@ -42,7 +42,7 @@ final class SOAPActionHandler: @unchecked Sendable {
 
         let arguments = LeafXMLParser(data: body).values
         if let instance = arguments["InstanceID"], instance != "0" {
-            return fault(code: 718, description: "Invalid InstanceID")
+            return fault(code: service == .renderingControl ? 702 : 718, description: "Invalid InstanceID")
         }
         log.record("SOAP \(service.label).\(action)")
 
@@ -81,6 +81,10 @@ final class SOAPActionHandler: @unchecked Sendable {
             case "Stop":
                 try playback.stop()
                 return success(action, service: .avTransport)
+            case "GetDeviceCapabilities":
+                return success(action, service: .avTransport, values: [
+                    ("PlayMedia", "NETWORK"), ("RecMedia", "NOT_IMPLEMENTED"), ("RecQualityModes", "NOT_IMPLEMENTED")
+                ])
             case "GetTransportSettings":
                 return success(action, service: .avTransport, values: [("PlayMode", "NORMAL"), ("RecQualityMode", "NOT_IMPLEMENTED")])
             case "SetPlayMode":
@@ -152,6 +156,13 @@ final class SOAPActionHandler: @unchecked Sendable {
             return fault(code: 402, description: "Invalid Args")
         }
         switch action {
+        case "ListPresets":
+            return success(action, service: .renderingControl, values: [("CurrentPresetNameList", "FactoryDefaults")])
+        case "SelectPreset":
+            guard let preset = arguments["PresetName"] else { return fault(code: 402, description: "Invalid Args") }
+            guard preset == "FactoryDefaults" else { return fault(code: 701, description: "Invalid Name") }
+            playback.resetRenderingDefaults()
+            return success(action, service: .renderingControl)
         case "GetVolume":
             return success(action, service: .renderingControl, values: [("CurrentVolume", String(playback.currentSnapshot().volume))])
         case "SetVolume":

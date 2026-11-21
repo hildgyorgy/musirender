@@ -12,28 +12,77 @@ struct HTTPRequest {
         return components.path.isEmpty ? "/" : components.path
     }
 
-    static func parse(_ data: Data) -> HTTPRequest? {
+    enum Framing {
+        case waitingForHeaders
+        case waitingForBody(sendContinue: Bool)
+        case complete(HTTPRequest)
+        case rejected(HTTPResponse)
+    }
+
+    static let maximumBytes = 1_048_576
+    private static let maximumHeaderBytes = 32_768
+
+    static func frame(_ data: Data) -> Framing {
+        let badRequest = Framing.rejected(.init(status: 400, reason: "Bad Request"))
+        let largeHeader = Framing.rejected(.init(status: 431, reason: "Request Header Fields Too Large"))
+        let largeBody = Framing.rejected(.init(status: 413, reason: "Payload Too Large"))
+        guard data.count <= maximumBytes else { return largeBody }
         let separator = Data("\r\n\r\n".utf8)
-        guard let headerRange = data.range(of: separator),
-              let headerText = String(data: data[..<headerRange.lowerBound], encoding: .utf8)
-        else { return nil }
+        guard let headerRange = data.range(of: separator) else {
+            return data.count > maximumHeaderBytes ? largeHeader : .waitingForHeaders
+        }
+        guard headerRange.upperBound <= maximumHeaderBytes else { return largeHeader }
+        guard let headerText = String(data: data[..<headerRange.lowerBound], encoding: .utf8) else { return badRequest }
 
         let lines = headerText.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return nil }
-        let parts = requestLine.split(separator: " ", maxSplits: 2).map(String.init)
-        guard parts.count == 3 else { return nil }
+        guard let requestLine = lines.first else { return badRequest }
+        let parts = requestLine.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3, isToken(parts[0]), parts[1].hasPrefix("/"),
+              parts[1].utf8.allSatisfy({ $0 > 32 && $0 != 127 }),
+              ["HTTP/1.0", "HTTP/1.1"].contains(parts[2]) else { return badRequest }
 
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            guard let colon = line.firstIndex(of: ":"), isToken(String(line[..<colon])) else { return badRequest }
+            let name = line[..<colon].lowercased()
             let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            headers[name] = value
+            guard value.utf8.allSatisfy({ $0 == 9 || ($0 >= 32 && $0 != 127) }) else { return badRequest }
+            if let existing = headers[name] {
+                guard name != "content-length", name != "transfer-encoding" else { return badRequest }
+                headers[name] = existing + ", " + value
+            } else {
+                headers[name] = value
+            }
         }
 
+        if headers["transfer-encoding"] != nil {
+            guard headers["content-length"] == nil else { return badRequest }
+            return .rejected(.init(status: 501, reason: "Transfer Encoding Not Implemented"))
+        }
         let bodyStart = headerRange.upperBound
-        let body = bodyStart < data.endIndex ? Data(data[bodyStart...]) : Data()
-        return HTTPRequest(method: parts[0], target: parts[1], version: parts[2], headers: headers, body: body)
+        let length: Int
+        if let rawLength = headers["content-length"] {
+            guard !rawLength.isEmpty, rawLength.utf8.allSatisfy({ (48...57).contains($0) }) else { return badRequest }
+            guard let parsed = Int(rawLength), parsed <= maximumBytes - bodyStart else { return largeBody }
+            length = parsed
+        } else {
+            length = 0
+        }
+        if let expect = headers["expect"], expect.lowercased() != "100-continue" || parts[2] != "HTTP/1.1" {
+            return .rejected(.init(status: 417, reason: "Expectation Failed"))
+        }
+        guard data.count - bodyStart >= length else {
+            return .waitingForBody(sendContinue: headers["expect"] != nil)
+        }
+        let body = Data(data[bodyStart..<(bodyStart + length)])
+        return .complete(HTTPRequest(method: parts[0], target: parts[1], version: parts[2], headers: headers, body: body))
+    }
+
+    private static func isToken(_ text: String) -> Bool {
+        !text.isEmpty && text.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) ||
+                "!#$%&'*+-.^`_|~".utf8.contains($0)
+        }
     }
 }
 
@@ -55,7 +104,7 @@ struct HTTPResponse {
         var allHeaders = headers
         allHeaders["Content-Length"] = String(body.count)
         allHeaders["Connection"] = "close"
-        allHeaders["Server"] = "macOS UPnP/1.1 MusiRenderer/0.1"
+        allHeaders["Server"] = RendererConfiguration.serverProduct
         var text = "HTTP/1.1 \(status) \(reason)\r\n"
         for (name, value) in allHeaders.sorted(by: { $0.key < $1.key }) {
             text += "\(name): \(value)\r\n"

@@ -1,7 +1,7 @@
 import Foundation
 
 public final class PlaybackCoordinator: @unchecked Sendable {
-    private struct Track {
+    private struct Track: Equatable {
         let uri: String
         let url: URL
         let metadata: String
@@ -36,15 +36,17 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     private var requestedState: TransportState = .noMediaPresent
     private var itemID = UUID()
     private var nextTrack: Track?
+    private var staged: (track: Track, id: UUID)?
     private var playlist: Playlist?
     private var importRevision: UInt64 = 0
     private var reachedEnd = false
+    private var delayedEnd: DispatchWorkItem?
 
     init(state: RendererState, player: AudioPlayer = AVPlayerAudioPlayer(), log: DiagnosticLog) {
         self.state = state
         self.player = player
         self.log = log
-        player.setVolume(0.5)
+        player.setVolume(Float(state.snapshot().volume) / 100)
         player.onEvent = { [weak self] id, event in
             self?.queue.async { [weak self] in self?.handle(event, id: id) }
         }
@@ -82,12 +84,18 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     func setNextURI(_ uri: String, metadata: String) throws {
         let track = uri.isEmpty ? nil : try Track(uri: uri, metadata: metadata)
         try queue.sync {
+            reconcileQueue()
             if playlist != nil {
                 if track == nil { return }
                 throw PlaybackError.noMedia
             }
             nextTrack = track
-            player.preload(url: track?.url)
+            stageFollowingTrack()
+            // A native transition can race a replacement of the staged URL.
+            if reconcileQueue() {
+                nextTrack = track
+                stageFollowingTrack()
+            }
             state.update {
                 $0.nextURI = track?.uri ?? ""
                 $0.nextMetadata = track?.metadata ?? ""
@@ -97,6 +105,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
 
     func next() throws {
         try queue.sync {
+            reconcileQueue()
             let snapshot = state.snapshot()
             guard !snapshot.currentURI.isEmpty else { throw PlaybackError.noMedia }
             guard let track = playlist?.next ?? nextTrack else { throw PlaybackError.invalidSeekTarget }
@@ -106,8 +115,35 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     }
 
     private func advance(to track: Track, targetState: TransportState) {
+        let queuedID = staged.flatMap { $0.track == track ? $0.id : nil }
+        let activeID = queuedID.flatMap { id in
+            player.activateNext(id: id, manually: true, playing: targetState == .playing) ? id : nil
+        }
         playlist?.index += 1
-        load(track, targetState: targetState)
+        load(track, targetState: targetState, activeID: activeID)
+    }
+
+    @discardableResult
+    private func reconcileQueue() -> Bool {
+        guard let staged, player.currentItemID == staged.id,
+              player.activateNext(id: staged.id, manually: false, playing: requestedState == .playing) else { return false }
+        playlist?.index += 1
+        load(staged.track, targetState: requestedState, activeID: staged.id)
+        return true
+    }
+
+    private func stageFollowingTrack() {
+        let following = playlist?.next ?? nextTrack
+        if staged?.track == following { return }
+        let candidate = following.map { ($0, UUID()) }
+        if let candidate, player.stageNext(url: candidate.0.url, id: candidate.1) {
+            staged = (track: candidate.0, id: candidate.1)
+        } else if following == nil {
+            _ = player.stageNext(url: nil, id: nil)
+            if player.currentItemID != staged?.id { staged = nil }
+        } else if player.currentItemID != staged?.id {
+            staged = nil
+        }
     }
 
     func previous() throws {
@@ -117,9 +153,12 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         }
     }
 
-    private func load(_ track: Track, targetState: TransportState, keepNext: Bool = false) {
+    private func load(_ track: Track, targetState: TransportState, keepNext: Bool = false, activeID: UUID? = nil) {
+        delayedEnd?.cancel()
+        delayedEnd = nil
         let parsed = DIDLMetadata.parse(track.metadata)
-        itemID = UUID()
+        itemID = activeID ?? UUID()
+        staged = nil
         reachedEnd = false
         let autoplay = targetState == .playing
         requestedState = targetState
@@ -147,14 +186,16 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             $0.duration = track.duration ?? 0
             $0.position = 0
         }
-        player.prepare(url: track.url, id: itemID)
-        if playlist != nil || keepNext { player.preload(url: (playlist?.next ?? nextTrack)?.url) }
-        if autoplay { player.play() }
-        log.record(autoplay ? "Advanced to next track" : "Prepared media URI")
+        if activeID == nil { player.prepare(url: track.url, id: itemID) }
+        stageFollowingTrack()
+        if autoplay && activeID == nil { player.play() }
+        if activeID != nil { log.record("Advanced to queued audio item") }
+        else { log.record(autoplay ? "Advanced to next track" : "Prepared media URI") }
     }
 
     public func play() throws {
         try queue.sync {
+            reconcileQueue()
             let snapshot = state.snapshot()
             guard !snapshot.currentURI.isEmpty else { throw PlaybackError.noMedia }
             if requestedState == .playing { return }
@@ -173,6 +214,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
 
     public func pause() throws {
         try queue.sync {
+            reconcileQueue()
             guard !state.snapshot().currentURI.isEmpty else { throw PlaybackError.noMedia }
             requestedState = .pausedPlayback
             player.pause()
@@ -183,6 +225,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     public func stop() throws {
         queue.sync {
             importRevision &+= 1
+            reconcileQueue()
             guard !state.snapshot().currentURI.isEmpty else { return }
             requestedState = .stopped
             reachedEnd = false
@@ -193,6 +236,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
 
     public func seek(to position: TimeInterval, expectedURI: String? = nil) throws {
         try queue.sync {
+            reconcileQueue()
             let snapshot = state.snapshot()
             guard !snapshot.currentURI.isEmpty, snapshot.transportStatus == "OK",
                   expectedURI == nil || snapshot.currentURI == expectedURI,
@@ -200,6 +244,8 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             guard position.isFinite, position >= 0, position <= player.duration else {
                 throw PlaybackError.invalidSeekTarget
             }
+            delayedEnd?.cancel()
+            delayedEnd = nil
             reachedEnd = false
             player.seek(to: position)
         }
@@ -220,8 +266,21 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         }
     }
 
+    func resetRenderingDefaults() {
+        queue.sync {
+            let defaults = RendererSnapshot()
+            player.setVolume(Float(defaults.volume) / 100)
+            player.setMuted(defaults.isMuted)
+            state.update { snapshot in
+                snapshot.volume = defaults.volume
+                snapshot.isMuted = defaults.isMuted
+            }
+        }
+    }
+
     public func currentSnapshot() -> RendererSnapshot {
         queue.sync {
+            reconcileQueue()
             var snapshot = state.snapshot()
             refreshTimes(&snapshot)
             return snapshot
@@ -229,8 +288,11 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     }
 
     private func handle(_ event: AudioPlaybackEvent, id: UUID) {
+        reconcileQueue()
         guard id == itemID else { return }
         switch event {
+        case .queueAdvanced:
+            break // The current-item identity was reconciled above.
         case let .audioFormat(format):
             state.update { $0.audioFormat = format }
         case .ready, .seekCompleted:
@@ -247,19 +309,38 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             state.update { $0.transportState = requestedState; refreshTimes(&$0) }
         case .ended:
             guard requestedState == .playing else { return }
-            if let track = playlist?.next ?? nextTrack {
-                advance(to: track, targetState: .playing)
+            if staged != nil {
+                // AVQueuePlayer may report the end before changing currentItem.
+                delayedEnd?.cancel()
+                let fallback = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.delayedEnd = nil
+                    self.reconcileQueue()
+                    guard self.itemID == id, self.requestedState == .playing else { return }
+                    self.finishCurrentItem()
+                }
+                delayedEnd = fallback
+                queue.asyncAfter(deadline: .now() + .milliseconds(350), execute: fallback)
             } else {
-                requestedState = .stopped
-                reachedEnd = true
-                player.pause()
-                state.update { $0.transportState = .stopped; refreshTimes(&$0) }
-                log.record("Playback reached end of queue")
+                finishCurrentItem()
             }
         case let .failed(message):
             requestedState = .stopped
+            player.pause()
             state.update { $0.transportState = .stopped; $0.transportStatus = "ERROR_OCCURRED" }
             log.record("Playback failed: \(message)", level: .error)
+        }
+    }
+
+    private func finishCurrentItem() {
+        if let track = playlist?.next ?? nextTrack {
+            advance(to: track, targetState: .playing)
+        } else {
+            requestedState = .stopped
+            reachedEnd = true
+            player.pause()
+            state.update { $0.transportState = .stopped; refreshTimes(&$0) }
+            log.record("Playback reached end of queue")
         }
     }
 

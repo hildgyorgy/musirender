@@ -1,6 +1,6 @@
-# MusiRenderer
+# MusiRender
 
-MusiRenderer is a native macOS UPnP/DLNA MediaRenderer. The current project is
+MusiRender is a native macOS UPnP/DLNA MediaRenderer. The current project is
 the **Milestone 5** build with a compact player, continuous HTTP playback,
 UPnP events and a controller-readable stream format report.
 
@@ -16,7 +16,7 @@ UPnP events and a controller-readable stream format report.
 2. Select the `MusiRenderer` scheme and your Mac.
 3. Build and run.
 4. Approve local-network access if macOS asks.
-5. Look for **MusiRenderer** in a UPnP control point such as MusiCards.
+5. Look for **MusiRender** in a UPnP control point such as MusiCards.
 
 The menu-bar icon opens the player controls, artwork supplied by the controller,
 stream format, diagnostics and the Launch at Login setting. The window button
@@ -58,11 +58,12 @@ sockets only. There are no runtime dependencies.
 - ALAC/M4A, MP3 and AAC protocol advertisement
 - authenticated HTTP URLs, preserved without rebuilding their query strings
 - SSDP rejoins IPv4 multicast after an interface change and reannounces on wake
+- the renderer advertises only after its HTTP listener starts successfully
 
 ## Stream format API
 
 A control point can use the origin of the device description's SSDP
-`LOCATION` and request `GET /api/v1/audio-format`. This is a MusiRenderer HTTP
+`LOCATION` and request `GET /api/v1/audio-format`. This is a MusiRender HTTP
 extension. Standard UPnP actions and events are unchanged.
 
 ```json
@@ -89,9 +90,13 @@ A controller can poll it after a track change and retry if `stream` is absent.
 
 ## Deliberate current limits
 
+- SOAP requests use `Content-Length`. The server supports `Expect: 100-continue`
+  and rejects chunked requests with HTTP 501.
+
 - A controller that hands off a DIDL-S album can disconnect after the renderer confirms receipt. Other controllers can supply each next URI individually. Playback stops at the end of the last track.
 - DIDL-S playlists use sequential mode and track-relative seeking. The handoff accepts an HTTP playlist URL at the address of the requesting IPv4 controller.
-- The renderer preloads asset information for the next track. Sample-accurate gapless transitions remain a future improvement.
+- The renderer queues the next audio item in AVQueuePlayer before the current
+  track ends. Seamlessness depends on the stream, audio format and buffering.
 - GENA accepts HTTP callbacks to the same IPv4 address as the subscribing control point.
 - Output-device selection and bit-perfect output verification are deferred.
 - If an audio stream fails permanently, Play retries from the start of the

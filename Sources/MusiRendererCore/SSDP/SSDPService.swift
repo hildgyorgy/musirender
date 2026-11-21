@@ -4,7 +4,7 @@ import Foundation
 public final class SSDPService: @unchecked Sendable {
     private static let multicastAddress = "239.255.255.250"
     private static let port: UInt16 = 1900
-    private static let configurationID: UInt32 = 5
+    private static let configurationID: UInt32 = 7
 
     private let configuration: RendererConfiguration
     private let log: DiagnosticLog
@@ -198,8 +198,7 @@ public final class SSDPService: @unchecked Sendable {
         log.record("SSDP M-SEARCH from \(senderAddress), ST=\(searchTarget)")
         let matchingTargets = targets(matching: searchTarget)
         guard !matchingTargets.isEmpty else { return }
-        guard let selectedInterface = interfaces.first(where: { $0.contains(address: sender.sin_addr) })
-                ?? interfaces.first else { return }
+        guard let selectedInterface = interfaces.first(where: { $0.contains(address: sender.sin_addr) }) else { return }
         let requestedDelay = Int(message.headers["mx"] ?? "1") ?? 1
         let maximumDelay = max(0, min(requestedDelay, 5))
         let delay = Double.random(in: 0...Double(maximumDelay))
@@ -231,7 +230,7 @@ public final class SSDPService: @unchecked Sendable {
         DATE: \(Self.httpDate())\r
         EXT:\r
         LOCATION: \(location)\r
-        SERVER: macOS UPnP/1.1 MusiRenderer/0.1\r
+        SERVER: \(RendererConfiguration.serverProduct)\r
         ST: \(target.notificationType)\r
         USN: \(target.usn)\r
         BOOTID.UPNP.ORG: \(bootID)\r
@@ -269,7 +268,7 @@ public final class SSDPService: @unchecked Sendable {
                 if subtype == "ssdp:alive" {
                     lines.append("CACHE-CONTROL: max-age=1800")
                     lines.append("LOCATION: http://\(interface.addressString):\(configuration.httpPort)/device.xml")
-                    lines.append("SERVER: macOS UPnP/1.1 MusiRenderer/0.1")
+                    lines.append("SERVER: \(RendererConfiguration.serverProduct)")
                 }
                 let message = lines.joined(separator: "\r\n") + "\r\n\r\n"
                 send(Data(message.utf8), to: destination, via: interface, multicast: true)

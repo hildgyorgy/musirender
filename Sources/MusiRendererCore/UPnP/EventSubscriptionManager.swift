@@ -76,18 +76,22 @@ final class EventSubscriptionManager: @unchecked Sendable {
         var sequence: UInt32 = 0
         var lastSent: String?
         var pending: String?
+        var inFlight: String?
+        var retries = 0
         var delivery: NWConnection?
         var timer: DispatchWorkItem?
     }
 
     private let queue = DispatchQueue(label: "com.musirenderer.gena")
     private let state: RendererState
+    private let log: DiagnosticLog
     private var observer: UUID?
     private var subscriptions: [String: Subscription] = [:]
     private var latest = RendererSnapshot()
 
-    init(state: RendererState) {
+    init(state: RendererState, log: DiagnosticLog) {
         self.state = state
+        self.log = log
         observer = state.observe { [weak self] snapshot in
             self?.queue.async { [weak self] in self?.publish(snapshot) }
         }
@@ -125,6 +129,7 @@ final class EventSubscriptionManager: @unchecked Sendable {
             }
             guard headers["nt"]?.lowercased() == "upnp:event",
                   let header = headers["callback"], let callback = Callback(header: header, peer: peer) else {
+                log.record("GENA subscription rejected for \(service.rawValue)", level: .warning)
                 return (preconditionFailed, nil)
             }
             guard subscriptions.count < 64 else { return (.init(status: 503, reason: "Service Unavailable"), nil) }
@@ -140,6 +145,7 @@ final class EventSubscriptionManager: @unchecked Sendable {
             guard var subscription = self.subscriptions[sid] else { return }
             guard accepted else { self.remove(sid); return }
             subscription.active = true
+            self.log.record("GENA subscribed to \(subscription.service.rawValue)")
             subscription.pending = subscription.service.payload(self.latest)
             self.subscriptions[sid] = subscription
             self.deliver(sid)
@@ -176,15 +182,15 @@ final class EventSubscriptionManager: @unchecked Sendable {
         for sid in Array(subscriptions.keys) {
             guard var sub = subscriptions[sid], sub.active else { continue }
             let payload = sub.service.payload(snapshot)
-            sub.pending = payload == sub.lastSent ? nil : payload
+            sub.pending = payload == (sub.inFlight ?? sub.lastSent) ? nil : payload
             subscriptions[sid] = sub
             deliver(sid)
         }
     }
 
     private func deliver(_ sid: String) {
-        guard var sub = subscriptions[sid], sub.active, sub.delivery == nil,
-              let payload = sub.pending else { return }
+        guard var sub = subscriptions[sid], sub.active, sub.delivery == nil, sub.timer == nil,
+              let payload = sub.inFlight ?? sub.pending else { return }
         guard sub.expires > .now() else { remove(sid); return }
         let callback = sub.callback
         let headers = [
@@ -195,34 +201,62 @@ final class EventSubscriptionManager: @unchecked Sendable {
         ].joined(separator: "\r\n")
         let message = Data((headers + "\r\n\r\n" + payload).utf8)
         let connection = NWConnection(host: .ipv4(callback.host), port: callback.port, using: .tcp)
-        let timer = DispatchWorkItem { [weak self] in self?.finishDelivery(sid, success: false) }
+        let timer = DispatchWorkItem { [weak self] in self?.finishDelivery(sid, status: nil) }
         sub.delivery = connection
         sub.timer = timer
-        sub.sequence = sub.sequence == UInt32.max ? 1 : sub.sequence + 1
-        sub.lastSent = payload
-        sub.pending = nil
+        if sub.inFlight == nil {
+            sub.inFlight = payload
+            sub.pending = nil
+        }
         subscriptions[sid] = sub
 
         queue.asyncAfter(deadline: .now() + .seconds(5), execute: timer)
         connection.start(queue: queue)
         connection.send(content: message, completion: .contentProcessed { [weak self, weak connection] error in
             guard let self, let connection, self.subscriptions[sid]?.delivery === connection else { return }
-            guard error == nil else { self.finishDelivery(sid, success: false); return }
-            connection.receive(minimumIncompleteLength: 12, maximumLength: 512) { [weak self, weak connection] data, _, _, _ in
+            guard error == nil else { self.finishDelivery(sid, status: nil); return }
+            connection.receive(minimumIncompleteLength: 13, maximumLength: 512) { [weak self, weak connection] data, _, _, _ in
                 guard let self, let connection, self.subscriptions[sid]?.delivery === connection else { return }
-                let status = data.map { String(decoding: $0.prefix(12), as: UTF8.self) } ?? ""
-                self.finishDelivery(sid, success: status == "HTTP/1.1 200" || status == "HTTP/1.0 200")
+                self.finishDelivery(sid, status: data.flatMap(Self.httpStatus))
             }
         })
     }
 
-    private func finishDelivery(_ sid: String, success: Bool) {
+    static func httpStatus(_ data: Data) -> Int? {
+        let prefix = Array(data.prefix(13))
+        guard prefix.count == 13,
+              ["HTTP/1.0 ", "HTTP/1.1 "].contains(String(decoding: prefix[0..<9], as: UTF8.self)),
+              prefix[9..<12].allSatisfy({ (48...57).contains($0) }),
+              prefix[12] == 32 || prefix[12] == 13 else { return nil }
+        return Int(String(decoding: prefix[9..<12], as: UTF8.self))
+    }
+
+    private func finishDelivery(_ sid: String, status: Int?) {
         guard var sub = subscriptions[sid] else { return }
-        guard success else { remove(sid); return }
         sub.delivery?.cancel()
         sub.timer?.cancel()
         sub.delivery = nil
         sub.timer = nil
+        if let status, (200..<300).contains(status) {
+            sub.lastSent = sub.inFlight
+            sub.inFlight = nil
+            sub.sequence = sub.sequence == UInt32.max ? 1 : sub.sequence + 1
+            sub.retries = 0
+        } else if sub.retries == 0, status == nil || status == 408 || status == 429 || (status ?? 0) >= 500 {
+            sub.retries = 1
+            let retry = DispatchWorkItem { [weak self] in
+                self?.subscriptions[sid]?.timer = nil
+                self?.deliver(sid)
+            }
+            sub.timer = retry
+            subscriptions[sid] = sub
+            queue.asyncAfter(deadline: .now() + .milliseconds(500), execute: retry)
+            return
+        } else {
+            log.record("GENA delivery failed for \(sub.service.rawValue); subscription removed", level: .warning)
+            remove(sid)
+            return
+        }
         subscriptions[sid] = sub
         deliver(sid)
     }

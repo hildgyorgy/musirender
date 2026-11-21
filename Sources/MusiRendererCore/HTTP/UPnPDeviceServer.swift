@@ -16,88 +16,103 @@ public final class UPnPDeviceServer: @unchecked Sendable {
         self.log = log
         self.rendererState = playback.state
         self.soapHandler = SOAPActionHandler(playback: playback, log: log)
-        self.subscriptions = EventSubscriptionManager(state: playback.state)
+        self.subscriptions = EventSubscriptionManager(state: playback.state, log: log)
     }
 
-    public func start() throws {
-        guard listener == nil else { return }
-        guard let port = NWEndpoint.Port(rawValue: configuration.httpPort) else {
-            throw ServerError.invalidPort
-        }
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-        let listener = try NWListener(using: parameters, on: port)
-        listener.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.log.record("HTTP server listening on port \(self.configuration.httpPort)")
-            case let .failed(error):
-                self.log.record("HTTP server failed: \(error)", level: .error)
-            case .cancelled:
-                self.log.record("HTTP server stopped")
-            default:
-                break
+    public func start(onFailure: @escaping @Sendable (String) -> Void = { _ in }) throws {
+        let startup: ListenerStartup? = try queue.sync {
+            guard listener == nil else { return nil }
+            guard let port = NWEndpoint.Port(rawValue: configuration.httpPort), port != .any else {
+                throw ServerError.invalidPort
             }
+            let listener = try NWListener(using: .tcp, on: port)
+            let startup = ListenerStartup()
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener, self.listener === listener else { return }
+                switch state {
+                case .ready:
+                    startup.complete(.success(()))
+                    self.log.record("HTTP server listening on port \(self.configuration.httpPort)")
+                case let .failed(error), let .waiting(error):
+                    if !startup.complete(.failure(error)) {
+                        DispatchQueue.global().async { onFailure(error.localizedDescription) }
+                    }
+                case .cancelled:
+                    startup.complete(.failure(ServerError.cancelled))
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.accept(connection)
+            }
+            self.listener = listener
+            listener.start(queue: queue)
+            return startup
         }
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.accept(connection)
+        guard let startup else { return }
+        do {
+            guard startup.signal.wait(timeout: .now() + .seconds(3)) == .success else {
+                throw ServerError.startupTimeout
+            }
+            try queue.sync { try startup.result?.get() }
+        } catch {
+            stop()
+            throw error
         }
-        self.listener = listener
-        listener.start(queue: queue)
     }
 
     public func stop() {
-        listener?.cancel()
-        listener = nil
-        queue.async { [weak self] in self?.playlistImport?.cancel() }
+        queue.sync {
+            let previous = listener
+            listener = nil
+            previous?.cancel()
+            playlistImport?.cancel()
+            playlistImport = nil
+        }
         subscriptions.stop()
     }
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)
-        receive(on: connection, accumulated: Data())
+        let deadline = DispatchWorkItem { [weak connection] in connection?.cancel() }
+        queue.asyncAfter(deadline: .now() + .seconds(10), execute: deadline)
+        receive(on: connection, accumulated: Data(), continued: false, deadline: deadline)
     }
 
-    private func receive(on connection: NWConnection, accumulated: Data) {
+    private func receive(on connection: NWConnection, accumulated: Data, continued: Bool, deadline: DispatchWorkItem) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, complete, error in
             guard let self else { return }
             var buffer = accumulated
             if let data { buffer.append(data) }
 
-            if buffer.count > 1_048_576 {
-                self.send(.init(status: 413, reason: "Payload Too Large"), on: connection)
-                return
-            }
-
-            if self.isCompleteRequest(buffer), let request = HTTPRequest.parse(buffer) {
+            let frame = HTTPRequest.frame(buffer)
+            switch frame {
+            case .complete(let request):
+                deadline.cancel()
                 self.handle(request, on: connection)
-            } else if complete || error != nil {
-                connection.cancel()
-            } else {
-                self.receive(on: connection, accumulated: buffer)
+            case .rejected(let response):
+                deadline.cancel()
+                self.send(response, on: connection)
+            case .waitingForHeaders, .waitingForBody:
+                guard !complete, error == nil else { deadline.cancel(); connection.cancel(); return }
+                if case .waitingForBody(sendContinue: true) = frame, !continued {
+                    let interim = Data("HTTP/1.1 100 Continue\r\n\r\n".utf8)
+                    let prefix = buffer
+                    connection.send(content: interim, completion: .contentProcessed { [weak self] error in
+                        guard error == nil else { deadline.cancel(); connection.cancel(); return }
+                        self?.receive(on: connection, accumulated: prefix, continued: true, deadline: deadline)
+                    })
+                } else {
+                    self.receive(on: connection, accumulated: buffer, continued: continued, deadline: deadline)
+                }
             }
         }
-    }
-
-    private func isCompleteRequest(_ data: Data) -> Bool {
-        let separator = Data("\r\n\r\n".utf8)
-        guard let range = data.range(of: separator) else { return false }
-        guard let header = String(data: data[..<range.lowerBound], encoding: .utf8) else { return true }
-        let lengthLine = header.components(separatedBy: "\r\n").first {
-            $0.lowercased().hasPrefix("content-length:")
-        }
-        let length = lengthLine.flatMap { line -> Int? in
-            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-            guard parts.count == 2 else { return nil }
-            return Int(parts[1].trimmingCharacters(in: .whitespaces))
-        } ?? 0
-        return length >= 0 && length <= data.count - range.upperBound
     }
 
     private func handle(_ request: HTTPRequest, on connection: NWConnection) {
         let method = request.method.uppercased()
-        log.record("HTTP \(method) \(request.target)")
+        log.record("HTTP \(method) \(request.target.split(separator: "?", maxSplits: 1).first ?? "/")")
         let response: HTTPResponse
 
         if method == "GET" || method == "HEAD" {
@@ -169,7 +184,30 @@ public final class UPnPDeviceServer: @unchecked Sendable {
         })
     }
 
-    private enum ServerError: Error {
+    private final class ListenerStartup {
+        let signal = DispatchSemaphore(value: 0)
+        private(set) var result: Result<Void, Error>?
+
+        @discardableResult
+        func complete(_ result: Result<Void, Error>) -> Bool {
+            guard self.result == nil else { return false }
+            self.result = result
+            signal.signal()
+            return true
+        }
+    }
+
+    private enum ServerError: LocalizedError {
         case invalidPort
+        case startupTimeout
+        case cancelled
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidPort: return "Invalid HTTP port"
+            case .startupTimeout: return "HTTP server did not become ready"
+            case .cancelled: return "HTTP server startup cancelled"
+            }
+        }
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum UPnPDescriptions {
-    static let sinkProtocolInfo = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*,http-get:*:audio/aac:*,\(DIDLPlaylist.protocolInfo)"
+    static let sinkProtocolInfo = "http-get:*:audio/mp4:*,http-get:*:audio/x-m4a:*,http-get:*:audio/mpeg:*,http-get:*:audio/aac:*,\(DIDLPlaylist.protocolInfo)"
     public static let deviceType = "urn:schemas-upnp-org:device:MediaRenderer:1"
     public static let avTransportType = "urn:schemas-upnp-org:service:AVTransport:1"
     public static let renderingControlType = "urn:schemas-upnp-org:service:RenderingControl:1"
@@ -15,9 +15,9 @@ public enum UPnPDescriptions {
           <device>
             <deviceType>\(deviceType)</deviceType>
             <friendlyName>\(name)</friendlyName>
-            <manufacturer>MusiRenderer Open Source Project</manufacturer>
+            <manufacturer>MusiRender Open Source Project</manufacturer>
             <modelDescription>Native macOS UPnP audio renderer</modelDescription>
-            <modelName>MusiRenderer</modelName>
+            <modelName>\(RendererConfiguration.productName)</modelName>
             <modelNumber>0.1</modelNumber>
             <UDN>uuid:\(configuration.uuid.uuidString.lowercased())</UDN>
             <serviceList>
@@ -52,6 +52,12 @@ public enum UPnPDescriptions {
         <action><name>Previous</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
         <action><name>Pause</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
         <action><name>Stop</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
+        <action><name>GetDeviceCapabilities</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(output("PlayMedia", "PossiblePlaybackStorageMedia"))
+          \(output("RecMedia", "PossibleRecordStorageMedia"))
+          \(output("RecQualityModes", "PossibleRecordQualityModes"))
+        </argumentList></action>
         <action><name>GetTransportSettings</name><argumentList>
           \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
           \(output("PlayMode", "CurrentPlayMode"))
@@ -116,6 +122,9 @@ public enum UPnPDescriptions {
         \(state("CurrentTransportActions", "string"))
         \(state("CurrentPlayMode", "string", allowed: ["NORMAL"]))
         \(state("CurrentRecordQualityMode", "string", allowed: ["NOT_IMPLEMENTED"]))
+        \(state("PossiblePlaybackStorageMedia", "string"))
+        \(state("PossibleRecordStorageMedia", "string"))
+        \(state("PossibleRecordQualityModes", "string"))
         \(state("CurrentTrack", "ui4"))
         \(state("CurrentTrackDuration", "string"))
         \(state("CurrentTrackMetaData", "string"))
@@ -136,6 +145,14 @@ public enum UPnPDescriptions {
     <scpd xmlns="urn:schemas-upnp-org:service-1-0">
       <specVersion><major>1</major><minor>0</minor></specVersion>
       <actionList>
+        <action><name>ListPresets</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(output("CurrentPresetNameList", "PresetNameList"))
+        </argumentList></action>
+        <action><name>SelectPreset</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(input("PresetName", "A_ARG_TYPE_PresetName"))
+        </argumentList></action>
         <action><name>GetVolume</name><argumentList>
           \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
           \(input("Channel", "A_ARG_TYPE_Channel"))
@@ -160,6 +177,8 @@ public enum UPnPDescriptions {
       <serviceStateTable>
         \(state("A_ARG_TYPE_InstanceID", "ui4"))
         \(state("A_ARG_TYPE_Channel", "string", allowed: ["Master"]))
+        \(state("PresetNameList", "string"))
+        \(state("A_ARG_TYPE_PresetName", "string", allowed: ["FactoryDefaults"]))
         <stateVariable sendEvents="no"><name>Volume</name><dataType>ui2</dataType><allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
         \(state("Mute", "boolean"))
         \(state("LastChange", "string", evented: true))

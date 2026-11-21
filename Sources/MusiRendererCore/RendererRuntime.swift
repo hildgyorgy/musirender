@@ -22,11 +22,16 @@ public final class RendererRuntime: @unchecked Sendable {
         self.ssdpService = SSDPService(configuration: configuration, log: log)
     }
 
-    public func start() throws {
+    public func start(onFailure: @escaping @Sendable (String) -> Void = { _ in }) throws {
         try lock.withLock {
             guard !running else { return }
             do {
-                try httpServer.start()
+                try httpServer.start { [weak self] message in
+                    guard let self else { return }
+                    self.log.record("HTTP server failed: \(message)", level: .error)
+                    self.stop()
+                    onFailure(message)
+                }
                 try ssdpService.start()
                 running = true
                 log.record("Renderer online as \(configuration.friendlyName), UDN=uuid:\(configuration.uuid.uuidString.lowercased())")

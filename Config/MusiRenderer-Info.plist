@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>MusiRenderer</string>
+	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,7 +32,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MusiRenderer uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.</string>
+	<string>MusiRender uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

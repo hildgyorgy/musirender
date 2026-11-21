@@ -35,6 +35,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var renderer = RendererSnapshot()
     @Published private(set) var outputName = DefaultAudioOutput.currentName()
     @Published private(set) var sourceName: String?
+    @Published private(set) var artworkImage: NSImage?
     @Published private(set) var loginStatus = SMAppService.mainApp.status
     @Published private(set) var loginError: String?
 
@@ -48,6 +49,8 @@ final class AppModel: ObservableObject {
     private var wakeObserver: NSObjectProtocol?
     private var sourceStream: URL?
     private var sourceLookup: Task<Void, Never>?
+    private var artworkURL: URL?
+    private var artworkTask: Task<Void, Never>?
 
     init() {
         let defaults = UserDefaults.standard
@@ -61,7 +64,7 @@ final class AppModel: ObservableObject {
 
         let configuredName = defaults.string(forKey: "friendlyName")?.trimmingCharacters(in: .whitespacesAndNewlines)
         configuration = RendererConfiguration(
-            friendlyName: configuredName?.isEmpty == false ? configuredName! : "MusiRenderer",
+            friendlyName: configuredName.flatMap { $0.isEmpty ? nil : $0 } ?? RendererConfiguration.productName,
             uuid: uuid
         )
         runtime = RendererRuntime(configuration: configuration)
@@ -92,16 +95,25 @@ final class AppModel: ObservableObject {
             runtime?.refreshAfterWake()
         }
 
-        do {
-            try runtime.start()
-            status = runtime.hasLANInterface ? .online : .waitingForLAN
-        } catch {
-            status = .failed(error.localizedDescription)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, runtime] in
+            do {
+                try runtime.start { message in
+                    DispatchQueue.main.async { self?.status = .failed(message) }
+                }
+                let readyStatus: Status = runtime.hasLANInterface ? .online : .waitingForLAN
+                DispatchQueue.main.async {
+                    if self?.status == .starting { self?.status = readyStatus }
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async { self?.status = .failed(message) }
+            }
         }
     }
 
     deinit {
         sourceLookup?.cancel()
+        artworkTask?.cancel()
         if let observerID { runtime.log.removeObserver(observerID) }
         if let stateObserverID { runtime.state.removeObserver(stateObserverID) }
         if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
@@ -113,6 +125,22 @@ final class AppModel: ObservableObject {
         let snapshot = runtime.playback.currentSnapshot()
         if renderer != snapshot { renderer = snapshot }
         refreshSource(for: snapshot.currentURI)
+        refreshArtwork(for: snapshot.artworkURL)
+    }
+
+    private func refreshArtwork(for url: URL?) {
+        guard url != artworkURL else { return }
+        artworkTask?.cancel()
+        artworkURL = url
+        artworkImage = nil
+        nowPlaying.setArtwork(nil, for: url)
+        guard let url else { return }
+        artworkTask = Task { [weak self] in
+            guard let image = await ArtworkLoader.image(from: url),
+                  !Task.isCancelled, let self, self.artworkURL == url else { return }
+            self.artworkImage = image
+            self.nowPlaying.setArtwork(image, for: url)
+        }
     }
 
     private func refreshSource(for uri: String) {

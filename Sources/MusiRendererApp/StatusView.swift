@@ -83,7 +83,7 @@ struct StatusView: View {
                 ))
                 .padding(.top, 6)
                 if model.loginStatus == .requiresApproval {
-                    Text("Approve MusiRenderer in System Settings → Login Items & Extensions.")
+                    Text("Approve MusiRender in System Settings → Login Items & Extensions.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let error = model.loginError {
@@ -117,9 +117,9 @@ struct StatusView: View {
     }
 
     private var artwork: some View {
-        AsyncImage(url: model.renderer.artworkURL) { phase in
-            if let image = phase.image {
-                image.resizable().scaledToFill()
+        Group {
+            if let image = model.artworkImage {
+                Image(nsImage: image).resizable().scaledToFill()
             } else {
                 ZStack {
                     Rectangle().fill(.quaternary)

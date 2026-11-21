@@ -79,23 +79,20 @@ public enum Redactor {
     private static let sensitiveNames: Set<String> = [
         "u", "p", "t", "s", "token", "apikey", "api_key", "password", "secret"
     ]
+    private static let queryParameter = try! NSRegularExpression(
+        pattern: #"(?:\?|&(?:amp;)?)([^?&=\s\"'<>]+)=([^?&#\s\"'<>]*)"#
+    )
 
     public static func redact(_ text: String) -> String {
-        guard let questionMark = text.firstIndex(of: "?") else { return text }
-        let prefix = String(text[...questionMark])
-        let query = String(text[text.index(after: questionMark)...])
-        let suffixStart = query.firstIndex(where: { $0 == " " || $0 == "\n" || $0 == "\r" })
-        let rawQuery = suffixStart.map { String(query[..<$0]) } ?? query
-        let suffix = suffixStart.map { String(query[$0...]) } ?? ""
-
-        let sanitized = rawQuery.split(separator: "&", omittingEmptySubsequences: false).map { pair -> String in
-            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard let name = parts.first else { return String(pair) }
-            let decoded = String(name).removingPercentEncoding?.lowercased() ?? String(name).lowercased()
-            guard sensitiveNames.contains(decoded), parts.count == 2 else { return String(pair) }
-            return "\(name)=<redacted>"
-        }.joined(separator: "&")
-
-        return prefix + sanitized + suffix
+        let input = text as NSString
+        let output = NSMutableString(string: text)
+        for match in queryParameter.matches(in: text, range: NSRange(location: 0, length: input.length)).reversed() {
+            let name = input.substring(with: match.range(at: 1))
+            let decoded = (name.removingPercentEncoding ?? name).lowercased()
+            if sensitiveNames.contains(decoded) {
+                output.replaceCharacters(in: match.range(at: 2), with: "<redacted>")
+            }
+        }
+        return output as String
     }
 }

@@ -3,6 +3,32 @@ import Foundation
 import XCTest
 
 final class SOAPActionHandlerTests: XCTestCase {
+    func testCapabilitiesPresetsAndCDATA() throws {
+        let log = DiagnosticLog()
+        let player = FakeAudioPlayer()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: log)
+        let handler = SOAPActionHandler(playback: playback, log: log)
+        func send(_ action: String, _ arguments: String = "", rendering: Bool = false) -> HTTPResponse {
+            let type = rendering ? UPnPDescriptions.renderingControlType : UPnPDescriptions.avTransportType
+            let service = rendering ? "renderingcontrol" : "avtransport"
+            return handler.handle(path: "/upnp/\(service)/control", headers: ["soapaction": "\(type)#\(action)"],
+                                  body: soap(action: action, arguments: "<InstanceID>0</InstanceID>" + arguments))
+        }
+        XCTAssertTrue(String(decoding: send("GetDeviceCapabilities").body, as: UTF8.self)
+            .contains("<PlayMedia>NETWORK</PlayMedia>"))
+        XCTAssertTrue(String(decoding: send("ListPresets", rendering: true).body, as: UTF8.self)
+            .contains("<CurrentPresetNameList>FactoryDefaults</CurrentPresetNameList>"))
+        playback.setVolume(85)
+        playback.setMuted(true)
+        XCTAssertEqual(send("SelectPreset", "<PresetName>FactoryDefaults</PresetName>", rendering: true).status, 200)
+        XCTAssertEqual(playback.currentSnapshot().volume, RendererSnapshot().volume)
+        XCTAssertFalse(player.muted)
+        let result = send("SetAVTransportURI",
+                          "<CurrentURI>http://example.test/one</CurrentURI><CurrentURIMetaData><![CDATA[<item><title>A &amp; B</title></item>]]></CurrentURIMetaData>")
+        XCTAssertEqual(result.status, 200)
+        XCTAssertEqual(playback.currentSnapshot().title, "A & B")
+    }
+
     func testAlbumPlaylistSurvivesConsecutiveNextWithoutController() throws {
         let player = FakeAudioPlayer()
         let log = DiagnosticLog()
@@ -47,8 +73,7 @@ final class SOAPActionHandlerTests: XCTestCase {
         XCTAssertEqual(second.title, "Track 2")
         XCTAssertTrue(second.canAdvanceToNext)
         XCTAssertTrue(send("GetPositionInfo").contains("<TrackURI>http://example.test/2?id=2&amp;token=test</TrackURI>"))
-        let id = try XCTUnwrap(second.itemID)
-        player.onEvent?(id, .ended)
+        player.finishNaturally()
         let third = playback.currentSnapshot()
         XCTAssertEqual(third.trackNumber, 3)
         XCTAssertEqual(third.title, "Track 3")
@@ -180,9 +205,13 @@ final class SOAPActionHandlerTests: XCTestCase {
         XCTAssertTrue(String(decoding: send("GetMediaInfo").body, as: UTF8.self)
             .contains("<NextURI>http://example.test/two?a=1&amp;b=2</NextURI>"))
 
-        player.onEvent?(first, .ended)
+        let nextID = try XCTUnwrap(player.stagedID)
+        player.finishNaturally()
         let promoted = playback.currentSnapshot()
         XCTAssertEqual(promoted.currentURI, "http://example.test/two?a=1&b=2")
+        XCTAssertEqual(promoted.itemID, nextID)
+        XCTAssertEqual(player.preparedURL?.absoluteString, "http://example.test/one")
+        XCTAssertEqual(player.playCalls, 1)
         XCTAssertEqual(promoted.title, "Two")
         XCTAssertEqual(promoted.artworkURL?.absoluteString, "https://example.test/cover?id=2&size=250")
         XCTAssertEqual(promoted.nextURI, "")
@@ -263,10 +292,43 @@ private final class FakeAudioPlayer: AudioPlayer {
     var seekTarget: TimeInterval?
     var itemID: UUID?
     var preloadedURL: URL?
+    var stagedID: UUID?
+    var playCalls = 0
+    var currentItemID: UUID? { itemID }
 
-    func prepare(url: URL, id: UUID) { preparedURL = url; itemID = id; emit(.ready) }
-    func preload(url: URL?) { preloadedURL = url }
-    func play() { emit(.playing) }
+    func prepare(url: URL, id: UUID) {
+        preparedURL = url
+        itemID = id
+        preloadedURL = nil
+        stagedID = nil
+        emit(.ready)
+    }
+
+    func stageNext(url: URL?, id: UUID?) -> Bool {
+        preloadedURL = url
+        stagedID = id
+        return id != nil
+    }
+
+    func activateNext(id: UUID, manually: Bool, playing: Bool) -> Bool {
+        guard stagedID == id, manually || itemID == id else { return false }
+        itemID = id
+        stagedID = nil
+        preloadedURL = nil
+        emit(.ready)
+        emit(playing ? .playing : .paused)
+        return true
+    }
+
+    func finishNaturally() {
+        let previous = itemID
+        let successor = stagedID
+        if let successor { itemID = successor }
+        if let previous { onEvent?(previous, .ended) }
+        if let successor { onEvent?(successor, .queueAdvanced) }
+    }
+
+    func play() { playCalls += 1; emit(.playing) }
     func pause() { emit(.paused) }
     func stop() { position = 0; emit(.paused) }
     func seek(to position: TimeInterval) { seekTarget = position }

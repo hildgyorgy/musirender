@@ -39,7 +39,6 @@ final class SystemNowPlaying {
     private var lastPresentation: Presentation?
     private var artworkURL: URL?
     private var artwork: MPMediaItemArtwork?
-    private var artworkTask: Task<Void, Never>?
 
     init(playback: PlaybackCoordinator) {
         self.playback = playback
@@ -52,14 +51,12 @@ final class SystemNowPlaying {
     deinit {
         for (command, target) in registrations { command.removeTarget(target) }
         if let observer { playback.state.removeObserver(observer) }
-        artworkTask?.cancel()
     }
 
     private func update(_ snapshot: RendererSnapshot) {
         let presentation = Presentation(snapshot)
         guard presentation != lastPresentation else { return }
         lastPresentation = presentation
-        if snapshot.artworkURL != artworkURL { loadArtwork(snapshot.artworkURL) }
         publish()
     }
 
@@ -105,22 +102,12 @@ final class SystemNowPlaying {
         }
     }
 
-    private func loadArtwork(_ url: URL?) {
-        artworkTask?.cancel()
-        artworkTask = nil
+    func setArtwork(_ image: NSImage?, for url: URL?) {
         artworkURL = url
-        artwork = nil
-        guard let url else { return }
-        artworkTask = Task { [weak self] in
-            guard let (data, response) = try? await URLSession.shared.data(from: url),
-                  !Task.isCancelled,
-                  let self, self.artworkURL == url,
-                  let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
-                  data.count <= 8_388_608,
-                  let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else { return }
-            self.artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            self.publish()
+        artwork = image.map { image in
+            MPMediaItemArtwork(boundsSize: image.size) { _ in image }
         }
+        publish()
     }
 
     private func registerCommands() {

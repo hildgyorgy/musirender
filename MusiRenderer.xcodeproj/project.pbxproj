@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		A10000000000000000000004 /* MusiRenderer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiRenderer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000004 /* MusiRender.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiRender.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		A10000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A10000000000000000000004 /* MusiRenderer.app */,
+				A10000000000000000000004 /* MusiRender.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,8 +66,8 @@
 			name = MusiRenderer;
 			packageProductDependencies = (
 			);
-			productName = MusiRenderer;
-			productReference = A10000000000000000000004 /* MusiRenderer.app */;
+			productName = MusiRender;
+			productReference = A10000000000000000000004 /* MusiRender.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -182,13 +182,13 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/MusiRenderer-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = MusiRenderer;
+				INFOPLIST_KEY_CFBundleDisplayName = MusiRender;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MusiRenderer uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MusiRender uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.";
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.musirenderer.MusiRenderer;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = MusiRender;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
@@ -204,13 +204,13 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/MusiRenderer-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = MusiRenderer;
+				INFOPLIST_KEY_CFBundleDisplayName = MusiRender;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MusiRenderer uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MusiRender uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.";
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.musirenderer.MusiRenderer;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = MusiRender;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
