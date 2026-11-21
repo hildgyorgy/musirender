@@ -102,6 +102,11 @@ until available, including bit depth for lossy codecs. `itemID` changes when a
 track is loaded, including a retry. The report contains no media URLs or tokens.
 A controller can poll it after a track change and retry if `stream` is absent.
 
+## Bit-perfect playback testing
+
+The [PCM measurement workflow](docs/BIT_PERFECT.md) includes test signals and
+a sample-by-sample comparison for digital captures.
+
 ## Deliberate current limits
 
 - SOAP requests use `Content-Length`. The server supports `Expect: 100-continue`
@@ -112,7 +117,7 @@ A controller can poll it after a track change and retry if `stream` is absent.
 - The renderer queues the next audio item in AVQueuePlayer before the current
   track ends. Seamlessness depends on the stream, audio format and buffering.
 - GENA accepts HTTP callbacks to the same IPv4 address as the subscribing control point.
-- Bit-perfect output verification is deferred.
+- Bit-perfect playback has yet to be verified at the physical output.
 - If an audio stream fails permanently, Play retries from the start of the
   current track and retains the queued next URI.
 - Discovery currently targets IPv4 home LANs, as required by SSDP interoperability.
