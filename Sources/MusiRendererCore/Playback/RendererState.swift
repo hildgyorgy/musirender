@@ -26,7 +26,8 @@ public struct RendererSnapshot: Sendable, Equatable {
     public var artworkURL: URL?
     public var itemID: UUID?
     public var audioFormat: StreamAudioFormat?
-    public var sampleRateError: String?
+    public var outputPlaybackError: String?
+    public var exclusiveOutputActive = false
     public var duration: TimeInterval = 0
     public var position: TimeInterval = 0
     public var volume: UInt16 = 50

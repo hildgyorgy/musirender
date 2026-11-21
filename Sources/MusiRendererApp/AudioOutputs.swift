@@ -89,6 +89,30 @@ final class AudioOutputs {
         }
     }
 
+    static func exclusiveOutputControl(for uid: String) -> ExclusiveOutputControl {
+        ExclusiveOutputControl {
+            guard let id = deviceID(for: uid) else { return .unavailable }
+            let device = AudioHardwareDevice(id: id)
+            guard let owner = try? device.hogModePID else { return .unavailable }
+            if owner == getpid() { return .acquired }
+            guard owner == -1 else { return .busy }
+            _ = try? device.toggleHogMode()
+            // Read the HAL property to confirm ownership independently of
+            // the toggle return value.
+            guard let newOwner = try? device.hogModePID else { return .unavailable }
+            if newOwner == getpid() { return .acquired }
+            return newOwner == -1 ? .unavailable : .busy
+        } release: {
+            guard let id = deviceID(for: uid) else { return true }
+            let device = AudioHardwareDevice(id: id)
+            guard let owner = try? device.hogModePID else { return false }
+            guard owner == getpid() else { return true }
+            _ = try? device.toggleHogMode()
+            guard let newOwner = try? device.hogModePID else { return false }
+            return newOwner != getpid()
+        }
+    }
+
     private nonisolated static func deviceID(for uid: String) -> AudioDeviceID? {
         var property = address(kAudioHardwarePropertyTranslateUIDToDevice)
         var qualifier: CFString = uid as CFString

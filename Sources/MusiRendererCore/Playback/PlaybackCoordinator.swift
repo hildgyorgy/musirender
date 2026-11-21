@@ -10,6 +10,18 @@ public struct OutputSampleRateControl: Sendable {
     }
 }
 
+public struct ExclusiveOutputControl: Sendable {
+    public enum Acquisition: Sendable { case acquired, busy, unavailable }
+
+    let acquire: @Sendable () -> Acquisition
+    let release: @Sendable () -> Bool
+
+    public init(acquire: @escaping @Sendable () -> Acquisition, release: @escaping @Sendable () -> Bool) {
+        self.acquire = acquire
+        self.release = release
+    }
+}
+
 public final class PlaybackCoordinator: @unchecked Sendable {
     private struct Track: Equatable {
         let uri: String
@@ -54,6 +66,8 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     private var outputDeviceUID: String?
     private var outputAvailable = true
     private var variableRendering: (volume: UInt16, muted: Bool)?
+    private var exclusiveOutputControl: ExclusiveOutputControl?
+    private var ownsExclusiveOutput = false
     private let readSourceRate: @Sendable (URL) async -> Double?
     private var sampleRateControl: OutputSampleRateControl?
     private var sourceFormatLoaded = false
@@ -75,7 +89,13 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         }
     }
 
-    deinit { followingTask?.cancel() }
+    deinit {
+        followingTask?.cancel()
+        if ownsExclusiveOutput {
+            player.pause()
+            _ = exclusiveOutputControl?.release()
+        }
+    }
 
     public func setURI(_ uri: String, metadata: String) throws {
         let track = try Track(uri: uri, metadata: metadata)
@@ -245,11 +265,12 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             $0.artworkURL = parsed.artworkURL
             $0.itemID = itemID
             $0.audioFormat = nil
-            $0.sampleRateError = nil
+            $0.outputPlaybackError = nil
             $0.duration = track.duration ?? 0
             $0.position = 0
         }
         if activeID == nil { player.prepare(url: track.url, id: itemID) }
+        if !autoplay { releaseExclusiveOutput() }
         stageFollowingTrack()
         if autoplay && activeID == nil { startPlayback() }
         if activeID != nil { log.record("Advanced to queued audio item") }
@@ -266,17 +287,37 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             if snapshot.transportStatus == "ERROR_OCCURRED" {
                 let track = try Track(uri: snapshot.currentURI, metadata: snapshot.currentMetadata)
                 load(track, targetState: .playing, keepNext: true)
-                return
+            } else {
+                if reachedEnd { player.seek(to: 0) }
+                reachedEnd = false
+                requestedState = .playing
+                state.update { $0.transportState = .transitioning; $0.transportStatus = "OK" }
+                startPlayback()
             }
-            if reachedEnd { player.seek(to: 0) }
-            reachedEnd = false
-            requestedState = .playing
-            state.update { $0.transportState = .transitioning; $0.transportStatus = "OK" }
-            startPlayback()
+            if let error = state.snapshot().outputPlaybackError {
+                throw PlaybackError.outputPreparationFailed(error)
+            }
         }
     }
 
     private func startPlayback() {
+        if let control = exclusiveOutputControl {
+            switch control.acquire() {
+            case .acquired:
+                if !ownsExclusiveOutput {
+                    ownsExclusiveOutput = true
+                    state.update { $0.exclusiveOutputActive = true }
+                    log.record("Acquired exclusive access to the selected output")
+                }
+            case .busy:
+                stopForOutputError("The selected audio output is held by another process.")
+                return
+            case .unavailable:
+                stopForOutputError("The selected audio output did not grant exclusive access.")
+                return
+            }
+        }
+
         guard sampleRateControl != nil else {
             player.play()
             return
@@ -289,7 +330,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         guard waitingForSourceRate, let control = sampleRateControl else { return }
         waitingForSourceRate = false
         guard let rate else {
-            stopForSampleRateError("Could not determine the source sample rate.")
+            stopForOutputError("Could not determine the source sample rate.")
             return
         }
         if control.read() == rate {
@@ -297,7 +338,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             return
         }
         guard control.request(rate) else {
-            stopForSampleRateError("The selected output could not switch to \(rate) Hz.")
+            stopForOutputError("The selected output could not switch to \(rate) Hz.")
             return
         }
         let requestID = UUID()
@@ -310,7 +351,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         if control.read() == rate {
             beginWithConfirmedRate(rate)
         } else if attempts == 0 {
-            stopForSampleRateError("The selected output did not confirm \(rate) Hz.")
+            stopForOutputError("The selected output did not confirm \(rate) Hz.")
         } else {
             queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
                 self?.confirmSampleRate(rate, requestID: requestID, attempts: attempts - 1)
@@ -330,14 +371,15 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         rateRequestID = nil
     }
 
-    private func stopForSampleRateError(_ message: String) {
+    private func stopForOutputError(_ message: String) {
         cancelRatePreparation()
         requestedState = .stopped
         player.pause()
+        releaseExclusiveOutput()
         state.update {
             $0.transportState = .stopped
             $0.transportStatus = "ERROR_OCCURRED"
-            $0.sampleRateError = message
+            $0.outputPlaybackError = message
         }
         log.record(message, level: .error)
     }
@@ -349,6 +391,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             cancelRatePreparation()
             requestedState = .pausedPlayback
             player.pause()
+            releaseExclusiveOutput()
             state.update { $0.transportState = .pausedPlayback; refreshTimes(&$0) }
         }
     }
@@ -357,11 +400,15 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         queue.sync {
             importRevision &+= 1
             reconcileQueue()
-            guard !state.snapshot().currentURI.isEmpty else { return }
+            guard !state.snapshot().currentURI.isEmpty else {
+                releaseExclusiveOutput()
+                return
+            }
             cancelRatePreparation()
             requestedState = .stopped
             reachedEnd = false
             player.stop()
+            releaseExclusiveOutput()
             state.update { $0.transportState = .stopped; $0.position = 0; $0.duration = player.duration }
         }
     }
@@ -412,6 +459,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
         try queue.sync {
             try requireStopped()
             if outputDeviceUID != uid {
+                try clearExclusiveOutputControl()
                 changeSampleRateControl(nil)
                 restoreVariableRendering()
                 player.setOutputDevice(uid: uid)
@@ -426,13 +474,44 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             guard uid == outputDeviceUID, available != outputAvailable else { return }
             outputAvailable = available
             if available { player.setOutputDevice(uid: uid) }
-            guard !available, requestedState == .playing || requestedState == .pausedPlayback else { return }
+            guard !available else { return }
+            guard requestedState == .playing || requestedState == .pausedPlayback else {
+                releaseExclusiveOutput()
+                return
+            }
             cancelRatePreparation()
             player.pause()
+            releaseExclusiveOutput()
             requestedState = .stopped
             state.update { $0.transportState = .stopped; refreshTimes(&$0) }
             log.record("Playback stopped because the selected output disconnected", level: .warning)
         }
+    }
+
+    public func setExclusiveOutputControl(_ control: ExclusiveOutputControl?) throws {
+        try queue.sync {
+            try requireStopped()
+            if control != nil, outputDeviceUID == nil { throw PlaybackError.outputUnavailable }
+            try clearExclusiveOutputControl()
+            exclusiveOutputControl = control
+        }
+    }
+
+    private func clearExclusiveOutputControl() throws {
+        releaseExclusiveOutput()
+        guard !ownsExclusiveOutput else { throw PlaybackError.exclusiveOutputReleaseFailed }
+        exclusiveOutputControl = nil
+    }
+
+    private func releaseExclusiveOutput() {
+        guard ownsExclusiveOutput else { return }
+        guard exclusiveOutputControl?.release() == true else {
+            log.record("Could not release exclusive access to the selected output", level: .error)
+            return
+        }
+        ownsExclusiveOutput = false
+        state.update { $0.exclusiveOutputActive = false }
+        log.record("Released exclusive access to the selected output")
     }
 
     public func setOutputSampleRateControl(_ control: OutputSampleRateControl?) throws {
@@ -543,6 +622,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             cancelRatePreparation()
             requestedState = .stopped
             player.pause()
+            releaseExclusiveOutput()
             state.update { $0.transportState = .stopped; $0.transportStatus = "ERROR_OCCURRED" }
             log.record("Playback failed: \(message)", level: .error)
         }
@@ -555,6 +635,7 @@ public final class PlaybackCoordinator: @unchecked Sendable {
             requestedState = .stopped
             reachedEnd = true
             player.pause()
+            releaseExclusiveOutput()
             state.update { $0.transportState = .stopped; refreshTimes(&$0) }
             log.record("Playback reached end of queue")
         }
@@ -566,7 +647,8 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     }
 
     public enum PlaybackError: Error {
-        case invalidURI, noMedia, invalidSeekTarget, outputUnavailable, outputChangeWhilePlaying
+        case invalidURI, noMedia, invalidSeekTarget, outputUnavailable, outputChangeWhilePlaying, exclusiveOutputReleaseFailed
+        case outputPreparationFailed(String)
     }
 }
 

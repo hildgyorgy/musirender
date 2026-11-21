@@ -52,6 +52,7 @@ public final class RendererRuntime: @unchecked Sendable {
             guard running else { return }
             ssdpService.stop()
             httpServer.stop()
+            try? playback.stop()
             running = false
             log.record("Renderer offline")
         }

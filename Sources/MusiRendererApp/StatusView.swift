@@ -69,7 +69,7 @@ struct StatusView: View {
             if model.renderer.duration > 0 {
                 seekControl
             }
-            if let error = model.renderer.sampleRateError {
+            if let error = model.renderer.outputPlaybackError {
                 Text(error).font(.caption).foregroundStyle(.red)
             } else if model.renderer.transportStatus == "ERROR_OCCURRED" {
                 Text("Playback interrupted. Press Play to retry from the beginning.")
@@ -153,8 +153,10 @@ struct StatusView: View {
 
     private var outputDetails: String {
         guard let name = model.activeOutput?.name else { return "Unavailable" }
-        guard let rate = model.outputSampleRate else { return name }
-        return "\(name) • \((rate / 1000).formatted()) kHz"
+        var details = [name]
+        if let rate = model.outputSampleRate { details.append("\((rate / 1000).formatted()) kHz") }
+        if model.renderer.exclusiveOutputActive { details.append("Exclusive") }
+        return details.joined(separator: " • ")
     }
 
     private var audioOutputSettings: some View {
@@ -183,6 +185,12 @@ struct StatusView: View {
             ))
             .disabled(!model.canChangeAudioOutput || model.selectedOutputUID == nil)
             .help("Switch the selected device to the track’s sample rate before playback. Tracks with different rates require a brief pause.")
+            Toggle("Exclusive audio output", isOn: Binding(
+                get: { model.usesExclusiveOutput },
+                set: model.setUsesExclusiveOutput
+            ))
+            .disabled(!model.canChangeAudioOutput || model.selectedOutputUID == nil)
+            .help("Reserve the selected device during playback. Pause and Stop release it.")
             if model.fixedVolume {
                 Text("Adjust listening volume on the DAC or amplifier.")
                     .font(.caption).foregroundStyle(.secondary)

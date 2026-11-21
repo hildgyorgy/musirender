@@ -3,6 +3,67 @@ import Foundation
 import XCTest
 
 final class SOAPActionHandlerTests: XCTestCase {
+    func testExclusiveOutputSpansQueuedTracksAndReleasesOnPauseStopAndEnd() throws {
+        let player = FakeAudioPlayer()
+        let output = TestExclusiveOutput()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
+        try playback.selectOutput(uid: "test-dac", available: true)
+        try playback.setExclusiveOutputControl(output.control)
+        try playback.setURI("http://example.test/first", metadata: "")
+        try playback.setNextURI("http://example.test/second", metadata: "")
+        try playback.play()
+        XCTAssertTrue(playback.currentSnapshot().exclusiveOutputActive)
+
+        player.finishNaturally()
+        XCTAssertTrue(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertEqual(output.acquisitions, 1)
+        XCTAssertEqual(output.releases, 0)
+
+        try playback.pause()
+        XCTAssertFalse(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertEqual(output.releases, 1)
+        try playback.play()
+        try playback.stop()
+        XCTAssertFalse(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertEqual(output.releases, 2)
+
+        try playback.play()
+        player.finishNaturally()
+        XCTAssertFalse(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertEqual(output.releases, 3)
+    }
+
+    func testBusyExclusiveOutputPreventsPlaybackAndCanBeRetried() throws {
+        let player = FakeAudioPlayer()
+        let output = TestExclusiveOutput()
+        output.busy = true
+        let log = DiagnosticLog()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: log)
+        let handler = SOAPActionHandler(playback: playback, log: log)
+        try playback.selectOutput(uid: "test-dac", available: true)
+        try playback.setExclusiveOutputControl(output.control)
+        try playback.setURI("http://example.test/track", metadata: "")
+        let response = handler.handle(
+            path: "/upnp/avtransport/control", headers: ["soapaction": "\(UPnPDescriptions.avTransportType)#Play"],
+            body: soap(action: "Play", arguments: "<InstanceID>0</InstanceID><Speed>1</Speed>")
+        )
+        XCTAssertEqual(response.status, 500)
+        XCTAssertTrue(String(decoding: response.body, as: UTF8.self).contains("held by another process"))
+        XCTAssertEqual(playback.currentSnapshot().transportState, .stopped)
+        XCTAssertNotNil(playback.currentSnapshot().outputPlaybackError)
+        XCTAssertFalse(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertEqual(player.playCalls, 0)
+        XCTAssertEqual(output.releases, 0)
+
+        output.busy = false
+        try playback.play()
+        XCTAssertTrue(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertNil(playback.currentSnapshot().outputPlaybackError)
+        playback.updateOutputAvailability(uid: "test-dac", available: false)
+        XCTAssertFalse(playback.currentSnapshot().exclusiveOutputActive)
+        XCTAssertEqual(output.releases, 1)
+    }
+
     func testRateMatchingKeepsSameRateQueuedAndSwitchesBeforePlayingDifferentRate() async throws {
         let player = FakeAudioPlayer()
         let output = TestSampleRateOutput()
@@ -49,7 +110,7 @@ final class SOAPActionHandlerTests: XCTestCase {
         player.emit(.audioFormat(pcmFormat(at: 96_000)))
         let state = playback.currentSnapshot()
         XCTAssertEqual(state.transportState, .stopped)
-        XCTAssertNotNil(state.sampleRateError)
+        XCTAssertNotNil(state.outputPlaybackError)
         XCTAssertEqual(player.playCalls, 0)
     }
 
@@ -462,5 +523,21 @@ private final class TestSampleRateOutput: @unchecked Sendable {
     func request(_ rate: Double) -> Bool {
         lock.withLock { requestedRates.append(rate) }
         return true
+    }
+}
+
+private final class TestExclusiveOutput: @unchecked Sendable {
+    var busy = false
+    private(set) var acquisitions = 0
+    private(set) var releases = 0
+
+    var control: ExclusiveOutputControl {
+        ExclusiveOutputControl {
+            self.acquisitions += 1
+            return self.busy ? .busy : .acquired
+        } release: {
+            self.releases += 1
+            return true
+        }
     }
 }

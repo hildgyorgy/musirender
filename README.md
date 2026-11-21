@@ -34,6 +34,9 @@ device disconnects, playback stops and requires an explicit Play to resume.
 waits for Core Audio to confirm the new rate before playing. Tracks whose
 sample rates match can still be queued for gapless playback. Tracks that
 require a rate change can have a brief pause between them.
+**Exclusive audio output** reserves the selected device during playback.
+Pause, Stop and the end of the queue release it. If macOS cannot grant access,
+the renderer reports the error and waits for another Play request.
 
 Core tests can also be run from Terminal:
 
@@ -109,7 +112,7 @@ A controller can poll it after a track change and retry if `stream` is absent.
 - The renderer queues the next audio item in AVQueuePlayer before the current
   track ends. Seamlessness depends on the stream, audio format and buffering.
 - GENA accepts HTTP callbacks to the same IPv4 address as the subscribing control point.
-- Exclusive device access and bit-perfect output verification are deferred.
+- Bit-perfect output verification is deferred.
 - If an audio stream fails permanently, Play retries from the start of the
   current track and retains the queued next URI.
 - Discovery currently targets IPv4 home LANs, as required by SSDP interoperability.

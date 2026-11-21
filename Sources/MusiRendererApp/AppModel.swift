@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var selectedOutputUID: String?
     @Published private(set) var fixedVolume = false
     @Published private(set) var matchesSourceSampleRate = false
+    @Published private(set) var usesExclusiveOutput = false
     @Published private(set) var outputError: String?
     @Published private(set) var sourceName: String?
     @Published private(set) var artworkImage: NSImage?
@@ -89,6 +90,10 @@ final class AppModel: ObservableObject {
             if let uid = selectedOutputUID, defaults.bool(forKey: "matchSourceSampleRate") {
                 try runtime.playback.setOutputSampleRateControl(AudioOutputs.sampleRateControl(for: uid))
                 matchesSourceSampleRate = true
+            }
+            if let uid = selectedOutputUID, defaults.bool(forKey: "exclusiveAudioOutput") {
+                try runtime.playback.setExclusiveOutputControl(AudioOutputs.exclusiveOutputControl(for: uid))
+                usesExclusiveOutput = true
             }
         } catch {
             outputError = "Could not restore the audio output settings."
@@ -203,12 +208,16 @@ final class AppModel: ObservableObject {
             selectedOutputUID = uid
             fixedVolume = false
             matchesSourceSampleRate = false
+            usesExclusiveOutput = false
             UserDefaults.standard.set(uid, forKey: "audioOutputUID")
             UserDefaults.standard.removeObject(forKey: "fixedAudioVolume")
             UserDefaults.standard.removeObject(forKey: "matchSourceSampleRate")
+            UserDefaults.standard.removeObject(forKey: "exclusiveAudioOutput")
             outputError = nil
             refreshAudioOutputs()
             refreshPlayback()
+        } catch PlaybackCoordinator.PlaybackError.exclusiveOutputReleaseFailed {
+            outputError = "Could not release the current audio output. Try Stop again."
         } catch {
             outputError = "Stop playback before changing the audio output."
         }
@@ -236,6 +245,21 @@ final class AppModel: ObservableObject {
             outputError = nil
         } catch {
             outputError = "Stop playback before changing automatic sample-rate matching."
+        }
+    }
+
+    func setUsesExclusiveOutput(_ enabled: Bool) {
+        guard let uid = selectedOutputUID else { return }
+        do {
+            let control = enabled ? AudioOutputs.exclusiveOutputControl(for: uid) : nil
+            try runtime.playback.setExclusiveOutputControl(control)
+            usesExclusiveOutput = enabled
+            UserDefaults.standard.set(enabled, forKey: "exclusiveAudioOutput")
+            outputError = nil
+        } catch PlaybackCoordinator.PlaybackError.exclusiveOutputReleaseFailed {
+            outputError = "Could not release the current audio output. Try Stop again."
+        } catch {
+            outputError = "Stop playback before changing exclusive audio output."
         }
     }
 

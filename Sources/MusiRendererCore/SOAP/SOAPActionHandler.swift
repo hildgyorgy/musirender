@@ -148,6 +148,8 @@ final class SOAPActionHandler: @unchecked Sendable {
             return fault(code: 711, description: "Illegal Seek Target")
         } catch PlaybackCoordinator.PlaybackError.outputUnavailable {
             return fault(code: 701, description: "Selected audio output unavailable")
+        } catch PlaybackCoordinator.PlaybackError.outputPreparationFailed(let message) {
+            return fault(code: 701, description: message)
         } catch {
             return fault(code: 501, description: "Action Failed")
         }
