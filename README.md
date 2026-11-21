@@ -6,8 +6,8 @@ UPnP events and a controller-readable stream format report.
 
 ## Requirements
 
-- macOS 14 Sonoma or later
-- Xcode 16 or later (the project is currently verified with Xcode 27.2)
+- An Apple silicon Mac running macOS 26 Tahoe or later
+- Xcode 26 or later (the project is currently verified with Xcode 27.2)
 - A Mac and controller device on the same IPv4 LAN
 
 ## Build and run

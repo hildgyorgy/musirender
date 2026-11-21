@@ -89,7 +89,7 @@ final class SystemNowPlaying {
             MPNowPlayingInfoPropertyPlaybackRate: snapshot.transportState == .playing ? 1.0 : 0.0,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
         ]
-        if #available(macOS 15, *) { metadata[MPNowPlayingInfoPropertyExcludeFromSuggestions] = true }
+        metadata[MPNowPlayingInfoPropertyExcludeFromSuggestions] = true
         if !snapshot.artist.isEmpty { metadata[MPMediaItemPropertyArtist] = snapshot.artist }
         if !snapshot.album.isEmpty { metadata[MPMediaItemPropertyAlbumTitle] = snapshot.album }
         if snapshot.duration > 0 { metadata[MPMediaItemPropertyPlaybackDuration] = snapshot.duration }

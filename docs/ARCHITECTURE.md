@@ -30,13 +30,10 @@ coupling any of them to SwiftUI.
 
 ## Decisions
 
-### Minimum deployment target: macOS 14 Sonoma
+### Minimum deployment target
 
-macOS 14 is the initial target. It preserves a useful hardware range while
-providing a stable modern SwiftUI menu-bar baseline. Lowering the target would
-increase compatibility work before discovery and playback behavior are proven.
-The core currently uses older system APIs and can be reassessed after the first
-real-device tests.
+The app targets macOS 26 Tahoe or later and the Xcode project builds it for
+Apple silicon (`arm64`). The Swift package uses the same macOS deployment target.
 
 ### Swift Package plus Xcode application
 
