@@ -3,7 +3,7 @@ import Foundation
 public struct RendererConfiguration: Sendable, Equatable {
     public static let defaultHTTPPort: UInt16 = 49_494
     public static let productName = "MusiRender"
-    static let serverProduct = "macOS UPnP/1.1 MusiRender/0.1"
+    static let serverProduct = "macOS UPnP/1.1 MusiRender/0.2.0"
 
     public var friendlyName: String
     public var uuid: UUID
