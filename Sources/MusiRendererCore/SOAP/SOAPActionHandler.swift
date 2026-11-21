@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 final class SOAPActionHandler: @unchecked Sendable {
     private let playback: PlaybackCoordinator
@@ -7,6 +8,31 @@ final class SOAPActionHandler: @unchecked Sendable {
     init(playback: PlaybackCoordinator, log: DiagnosticLog) {
         self.playback = playback
         self.log = log
+    }
+
+    func playlistRequest(path: String, headers: [String: String], body: Data) -> (uri: String, metadata: String)? {
+        guard Service(path: path) == .avTransport,
+              actionName(headers: headers, body: body) == "SetAVTransportURI" else { return nil }
+        let arguments = LeafXMLParser(data: body).values
+        guard arguments["InstanceID"] == nil || arguments["InstanceID"] == "0",
+              let uri = arguments["CurrentURI"], let metadata = arguments["CurrentURIMetaData"],
+              DIDLPlaylist.identifiesPlaylist(metadata, uri: uri) else { return nil }
+        return (uri, metadata)
+    }
+
+    func beginPlaylistImport() -> UInt64 { playback.beginPlaylistImport() }
+
+    func importPlaylist(uri: String, metadata: String, peer: NWEndpoint, revision: UInt64) async -> HTTPResponse {
+        do {
+            let entries = try await DIDLPlaylist.download(uri: uri, from: peer)
+            try playback.importPlaylist(uri: uri, metadata: metadata, entries: entries, revision: revision)
+            return success("SetAVTransportURI", service: .avTransport)
+        } catch PlaybackCoordinator.PlaybackError.noMedia {
+            return fault(code: 701, description: "Transition Not Available")
+        } catch {
+            log.record("Could not import album playlist", level: .warning)
+            return fault(code: 716, description: "Resource Not Found")
+        }
     }
 
     func handle(path: String, headers: [String: String], body: Data) -> HTTPResponse {
@@ -55,13 +81,18 @@ final class SOAPActionHandler: @unchecked Sendable {
             case "Stop":
                 try playback.stop()
                 return success(action, service: .avTransport)
+            case "GetTransportSettings":
+                return success(action, service: .avTransport, values: [("PlayMode", "NORMAL"), ("RecQualityMode", "NOT_IMPLEMENTED")])
+            case "SetPlayMode":
+                guard let mode = arguments["NewPlayMode"] else { return fault(code: 402, description: "Invalid Args") }
+                guard mode == "NORMAL" else { return fault(code: 712, description: "Play Mode Not Supported") }
+                return success(action, service: .avTransport)
             case "Seek":
                 guard arguments["InstanceID"] == "0",
                       let unit = arguments["Unit"], let target = arguments["Target"] else {
                     return fault(code: 402, description: "Invalid Args")
                 }
-                // Track time and media time share the same origin for a single URI.
-                guard unit == "REL_TIME" || unit == "ABS_TIME" else {
+                guard unit == "REL_TIME" || (unit == "ABS_TIME" && playback.state.snapshot().playlistURI == nil) else {
                     return fault(code: 710, description: "Seek Mode Not Supported")
                 }
                 guard let position = UPnPTime.parse(target) else {
@@ -79,22 +110,22 @@ final class SOAPActionHandler: @unchecked Sendable {
             case "GetPositionInfo":
                 let state = playback.currentSnapshot()
                 return success(action, service: .avTransport, values: [
-                    ("Track", state.currentURI.isEmpty ? "0" : "1"),
+                    ("Track", String(state.trackNumber)),
                     ("TrackDuration", UPnPTime.format(state.duration)),
                     ("TrackMetaData", state.currentMetadata),
                     ("TrackURI", state.currentURI),
                     ("RelTime", UPnPTime.format(state.position)),
-                    ("AbsTime", UPnPTime.format(state.position)),
+                    ("AbsTime", state.playlistURI == nil ? UPnPTime.format(state.position) : "NOT_IMPLEMENTED"),
                     ("RelCount", "2147483647"),
                     ("AbsCount", "2147483647")
                 ])
             case "GetMediaInfo":
                 let state = playback.currentSnapshot()
                 return success(action, service: .avTransport, values: [
-                    ("NrTracks", state.currentURI.isEmpty ? "0" : "1"),
-                    ("MediaDuration", UPnPTime.format(state.duration)),
-                    ("CurrentURI", state.currentURI),
-                    ("CurrentURIMetaData", state.currentMetadata),
+                    ("NrTracks", String(state.trackCount)),
+                    ("MediaDuration", UPnPTime.format(state.mediaDuration)),
+                    ("CurrentURI", state.mediaURI),
+                    ("CurrentURIMetaData", state.mediaMetadata),
                     ("NextURI", state.nextURI), ("NextURIMetaData", state.nextMetadata),
                     ("PlayMedium", "NETWORK"), ("RecordMedium", "NOT_IMPLEMENTED"),
                     ("WriteStatus", "NOT_IMPLEMENTED")

@@ -3,6 +3,99 @@ import Foundation
 import XCTest
 
 final class SOAPActionHandlerTests: XCTestCase {
+    func testAlbumPlaylistSurvivesConsecutiveNextWithoutController() throws {
+        let player = FakeAudioPlayer()
+        let log = DiagnosticLog()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: log)
+        let handler = SOAPActionHandler(playback: playback, log: log)
+        let uri = "http://127.0.0.1:8000/album.xml"
+        let xml = """
+            <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            \((1...3).map { number in
+                """
+                <item><dc:title>Track \(number)</dc:title><res protocolInfo="http-get:*:audio/mp4:*" duration="0:02:00">http://example.test/\(number)?id=\(number)&amp;token=test</res></item>
+                """
+            }.joined())
+            </DIDL-Lite>
+            """
+        let entries = try DIDLPlaylist.parse(Data(xml.utf8))
+        let requestMetadata = """
+            <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">
+            <item><res protocolInfo="http-get:*:text/xml:DLNA.ORG_PN=DIDL_S">\(uri)</res></item>
+            </DIDL-Lite>
+            """
+        XCTAssertTrue(DIDLPlaylist.identifiesPlaylist(requestMetadata, uri: uri))
+        XCTAssertFalse(DIDLPlaylist.identifiesPlaylist(requestMetadata, uri: "http://127.0.0.1/other.xml"))
+        let revision = playback.beginPlaylistImport()
+        try playback.stop()
+        XCTAssertThrowsError(try playback.importPlaylist(uri: uri, metadata: requestMetadata, entries: entries, revision: revision))
+        try playback.importPlaylist(uri: uri, metadata: requestMetadata, entries: entries, revision: playback.beginPlaylistImport())
+        func send(_ action: String) -> String {
+            let response = handler.handle(path: "/upnp/avtransport/control",
+                                          headers: ["soapaction": "\(UPnPDescriptions.avTransportType)#\(action)"],
+                                          body: soap(action: action, arguments: "<InstanceID>0</InstanceID>"))
+            return String(decoding: response.body, as: UTF8.self)
+        }
+        XCTAssertTrue(send("GetMediaInfo").contains("<NrTracks>3</NrTracks>"))
+        XCTAssertTrue(send("GetMediaInfo").contains("<CurrentURI>\(uri)</CurrentURI>"))
+        XCTAssertTrue(send("GetMediaInfo").contains("<NextURI></NextURI>"))
+        try playback.play()
+        XCTAssertEqual(playback.currentSnapshot().transportState, .playing)
+        try playback.next()
+        let second = playback.currentSnapshot()
+        XCTAssertEqual(second.trackNumber, 2)
+        XCTAssertEqual(second.title, "Track 2")
+        XCTAssertTrue(second.canAdvanceToNext)
+        XCTAssertTrue(send("GetPositionInfo").contains("<TrackURI>http://example.test/2?id=2&amp;token=test</TrackURI>"))
+        let id = try XCTUnwrap(second.itemID)
+        player.onEvent?(id, .ended)
+        let third = playback.currentSnapshot()
+        XCTAssertEqual(third.trackNumber, 3)
+        XCTAssertEqual(third.title, "Track 3")
+        XCTAssertEqual(playback.currentSnapshot().transportState, .playing)
+        XCTAssertFalse(third.canAdvanceToNext)
+    }
+
+    func testManualNextWhenPausedKeepsPlaybackPaused() throws {
+        let player = FakeAudioPlayer()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
+        try playback.setURI("http://example.test/first", metadata: "")
+        try playback.setNextURI("http://example.test/second", metadata: "")
+        try playback.play()
+        try playback.pause()
+        XCTAssertTrue(playback.currentSnapshot().canAdvanceToNext)
+        try playback.next()
+        let snapshot = playback.currentSnapshot()
+        XCTAssertEqual(snapshot.transportState, .pausedPlayback)
+        XCTAssertEqual(snapshot.currentURI, "http://example.test/second")
+        XCTAssertFalse(snapshot.canAdvanceToNext)
+        XCTAssertThrowsError(try playback.previous())
+    }
+
+    func testFormatBelongsToCurrentItemAndRetryRetainsNext() throws {
+        let player = FakeAudioPlayer()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
+        let first = "http://example.test/first"
+        let second = "http://example.test/second"
+        try playback.setURI(first, metadata: "")
+        try playback.setNextURI(second, metadata: "")
+        try playback.play()
+        let firstID = try XCTUnwrap(playback.currentSnapshot().itemID)
+        let format = StreamAudioFormat(codec: "ALAC", sampleRateHz: 96_000, bitDepth: 24,
+                                       channels: 2, estimatedBitrateBps: 2_000_000)
+        player.onEvent?(firstID, .audioFormat(format))
+        XCTAssertEqual(playback.currentSnapshot().audioFormat, format)
+        player.onEvent?(firstID, .failed("Connection lost"))
+        try playback.play()
+        player.onEvent?(firstID, .audioFormat(format))
+        let retried = playback.currentSnapshot()
+        XCTAssertNotEqual(retried.itemID, firstID)
+        XCTAssertNil(retried.audioFormat)
+        XCTAssertEqual(retried.currentURI, first)
+        XCTAssertEqual(retried.nextURI, second)
+        XCTAssertEqual(retried.transportState, .playing)
+    }
+
     func testSeekAndLocalChangesAreReflectedInPolling() throws {
         let player = FakeAudioPlayer()
         let log = DiagnosticLog()
@@ -76,8 +169,13 @@ final class SOAPActionHandlerTests: XCTestCase {
         try playback.play()
         XCTAssertEqual(playback.currentSnapshot().transportState, .playing)
         let first = try XCTUnwrap(player.itemID)
+        let nextMetadata = """
+            &lt;DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"&gt;
+            &lt;item&gt;&lt;dc:title&gt;Two&lt;/dc:title&gt;&lt;upnp:albumArtURI&gt;https://example.test/cover?id=2&amp;amp;size=250&lt;/upnp:albumArtURI&gt;&lt;/item&gt;
+            &lt;/DIDL-Lite&gt;
+            """
         XCTAssertEqual(send("SetNextAVTransportURI",
-                            "<NextURI>http://example.test/two?a=1&amp;b=2</NextURI><NextURIMetaData>&lt;title&gt;Two&lt;/title&gt;</NextURIMetaData>").status, 200)
+                            "<NextURI>http://example.test/two?a=1&amp;b=2</NextURI><NextURIMetaData>\(nextMetadata)</NextURIMetaData>").status, 200)
         XCTAssertEqual(player.preloadedURL?.absoluteString, "http://example.test/two?a=1&b=2")
         XCTAssertTrue(String(decoding: send("GetMediaInfo").body, as: UTF8.self)
             .contains("<NextURI>http://example.test/two?a=1&amp;b=2</NextURI>"))
@@ -86,6 +184,7 @@ final class SOAPActionHandlerTests: XCTestCase {
         let promoted = playback.currentSnapshot()
         XCTAssertEqual(promoted.currentURI, "http://example.test/two?a=1&b=2")
         XCTAssertEqual(promoted.title, "Two")
+        XCTAssertEqual(promoted.artworkURL?.absoluteString, "https://example.test/cover?id=2&size=250")
         XCTAssertEqual(promoted.nextURI, "")
         player.onEvent?(first, .ended)
         XCTAssertEqual(playback.currentSnapshot().transportState, .playing)

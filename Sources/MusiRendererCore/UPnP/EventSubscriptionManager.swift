@@ -12,15 +12,15 @@ final class EventSubscriptionManager: @unchecked Sendable {
             let properties: [(String, String)]
             switch self {
             case .avTransport:
-                let count = state.currentURI.isEmpty ? "0" : "1"
                 let duration = UPnPTime.format(state.duration)
                 let values = [
                     ("TransportState", state.transportState.rawValue), ("TransportStatus", state.transportStatus),
-                    ("TransportPlaySpeed", "1"), ("CurrentTrack", count), ("NumberOfTracks", count),
-                    ("AVTransportURI", state.currentURI), ("AVTransportURIMetaData", state.currentMetadata),
+                    ("TransportPlaySpeed", "1"), ("CurrentPlayMode", "NORMAL"),
+                    ("CurrentTrack", String(state.trackNumber)), ("NumberOfTracks", String(state.trackCount)),
+                    ("AVTransportURI", state.mediaURI), ("AVTransportURIMetaData", state.mediaMetadata),
                     ("CurrentTrackURI", state.currentURI), ("CurrentTrackMetaData", state.currentMetadata),
                     ("NextAVTransportURI", state.nextURI), ("NextAVTransportURIMetaData", state.nextMetadata),
-                    ("CurrentTrackDuration", duration), ("CurrentMediaDuration", duration),
+                    ("CurrentTrackDuration", duration), ("CurrentMediaDuration", UPnPTime.format(state.mediaDuration)),
                     ("CurrentTransportActions", state.transportActions),
                     ("PlaybackStorageMedium", state.currentURI.isEmpty ? "NONE" : "NETWORK"),
                     ("RecordStorageMedium", "NOT_IMPLEMENTED"), ("RecordMediumWriteStatus", "NOT_IMPLEMENTED")

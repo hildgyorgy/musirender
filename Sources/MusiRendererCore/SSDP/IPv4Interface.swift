@@ -1,13 +1,17 @@
 import Darwin
 import Foundation
 
-struct IPv4Interface: Sendable {
+struct IPv4Interface: Sendable, Equatable {
     let name: String
     let address: in_addr
     let netmask: in_addr
     let index: UInt32
 
     var addressString: String { Self.string(from: address) }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.index == rhs.index && lhs.address.s_addr == rhs.address.s_addr && lhs.netmask.s_addr == rhs.netmask.s_addr
+    }
 
     func contains(address candidate: in_addr) -> Bool {
         (address.s_addr & netmask.s_addr) == (candidate.s_addr & netmask.s_addr)

@@ -15,14 +15,34 @@ public struct RendererSnapshot: Sendable, Equatable {
     public var currentMetadata = ""
     public var nextURI = ""
     public var nextMetadata = ""
+    var playlistURI: String?
+    var playlistMetadata: String?
+    var playlistCount = 0
+    var playlistIndex = 0
+    var playlistDuration: TimeInterval?
     public var title = ""
     public var artist = ""
+    public var album = ""
+    public var artworkURL: URL?
+    public var itemID: UUID?
+    public var audioFormat: StreamAudioFormat?
     public var duration: TimeInterval = 0
     public var position: TimeInterval = 0
     public var volume: UInt16 = 50
     public var isMuted = false
 
     public init() {}
+
+    var canAdvanceToNext: Bool {
+        !currentURI.isEmpty && (!nextURI.isEmpty || playlistIndex + 1 < playlistCount) && transportState != .transitioning &&
+            transportState != .noMediaPresent
+    }
+
+    var trackNumber: Int { currentURI.isEmpty ? 0 : playlistIndex + 1 }
+    var trackCount: Int { playlistCount > 0 ? playlistCount : (currentURI.isEmpty ? 0 : 1) }
+    var mediaURI: String { playlistURI ?? currentURI }
+    var mediaMetadata: String { playlistMetadata ?? currentMetadata }
+    var mediaDuration: TimeInterval { playlistURI == nil ? duration : playlistDuration ?? 0 }
 
     var transportActions: String {
         var actions: [String]
@@ -34,7 +54,7 @@ public struct RendererSnapshot: Sendable, Equatable {
         case .transitioning: actions = ["Stop", "Pause"]
         }
         if !currentURI.isEmpty, duration > 0, transportStatus == "OK" { actions.append("Seek") }
-        if !nextURI.isEmpty, transportState == .playing || transportState == .stopped { actions.append("Next") }
+        if canAdvanceToNext { actions.append("Next") }
         return actions.joined(separator: ",")
     }
 }

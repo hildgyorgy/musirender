@@ -1,8 +1,8 @@
 # MusiRenderer
 
 MusiRenderer is a native macOS UPnP/DLNA MediaRenderer. The current project is
-the **Milestone 4** build with continuous HTTP playback, two-way seeking and
-UPnP event notifications.
+the **Milestone 5** build with a compact player, continuous HTTP playback,
+UPnP events and a controller-readable stream format report.
 
 ## Requirements
 
@@ -18,8 +18,11 @@ UPnP event notifications.
 4. Approve local-network access if macOS asks.
 5. Look for **MusiRenderer** in a UPnP control point such as MusiCards.
 
-The menu-bar icon opens a small status and diagnostics panel. The renderer runs
-without a player window.
+The menu-bar icon opens the player controls, artwork supplied by the controller,
+stream format, diagnostics and the Launch at Login setting. The window button
+opens a separate compact player. The renderer can run with both views closed.
+macOS Now Playing shows the active track and provides system media controls.
+To use Launch at Login outside development, keep the app at a stable path.
 
 Core tests can also be run from Terminal:
 
@@ -48,19 +51,51 @@ sockets only. There are no runtime dependencies.
 - `SetAVTransportURI`, Play, Pause and Stop
 - transport, media and position polling
 - time-based seeking from a UPnP controller or the menu-bar position slider
-- one prepared next URI via `SetNextAVTransportURI`, with automatic advancement at end of track
-- `Next` consumes the prepared URI. `Previous` returns UPnP error 711 when a track is loaded because the control point owns playlist history.
+- autonomous album playback from a downloaded DIDL-S playlist, or one prepared next URI via `SetNextAVTransportURI`
+- `Next` advances within the downloaded album or consumes the prepared URI. `Previous` currently returns UPnP error 711 when a track is loaded.
 - GENA subscriptions and renewal, with AVTransport and RenderingControl `LastChange` events
 - volume and mute on the Master channel
 - ALAC/M4A, MP3 and AAC protocol advertisement
 - authenticated HTTP URLs, preserved without rebuilding their query strings
+- SSDP rejoins IPv4 multicast after an interface change and reannounces on wake
+
+## Stream format API
+
+A control point can use the origin of the device description's SSDP
+`LOCATION` and request `GET /api/v1/audio-format`. This is a MusiRenderer HTTP
+extension. Standard UPnP actions and events are unchanged.
+
+```json
+{
+  "itemID": "D79B4519-DA79-4CAB-862D-C187E4FC8F3F",
+  "transportState": "PLAYING",
+  "transportStatus": "OK",
+  "stream": {
+    "codec": "ALAC",
+    "sampleRateHz": 96000,
+    "bitDepth": 24,
+    "channels": 2,
+    "estimatedBitrateBps": 2400000
+  }
+}
+```
+
+The `stream` object describes the audio track opened by AVPlayer. The bitrate is
+the track's estimated encoded rate in bits per second. It is not download
+throughput or a measurement of the Core Audio/DAC output. Fields are omitted
+until available, including bit depth for lossy codecs. `itemID` changes when a
+track is loaded, including a retry. The report contains no media URLs or tokens.
+A controller can poll it after a track change and retry if `stream` is absent.
 
 ## Deliberate current limits
 
-- Continuous playback requires the control point to supply each next URI. An empty next URI clears the queue, and playback stops at the end of the last track.
+- A controller that hands off a DIDL-S album can disconnect after the renderer confirms receipt. Other controllers can supply each next URI individually. Playback stops at the end of the last track.
+- DIDL-S playlists use sequential mode and track-relative seeking. The handoff accepts an HTTP playlist URL at the address of the requesting IPv4 controller.
 - The renderer preloads asset information for the next track. Sample-accurate gapless transitions remain a future improvement.
 - GENA accepts HTTP callbacks to the same IPv4 address as the subscribing control point.
-- Artwork and output-device selection are deferred.
+- Output-device selection and bit-perfect output verification are deferred.
+- If an audio stream fails permanently, Play retries from the start of the
+  current track and retains the queued next URI.
 - Discovery currently targets IPv4 home LANs, as required by SSDP interoperability.
 
 ## Diagnostics and privacy

@@ -6,12 +6,15 @@ public final class UPnPDeviceServer: @unchecked Sendable {
     private let log: DiagnosticLog
     private let soapHandler: SOAPActionHandler
     private let subscriptions: EventSubscriptionManager
+    private let rendererState: RendererState
     private let queue = DispatchQueue(label: "com.musirenderer.http")
     private var listener: NWListener?
+    private var playlistImport: Task<Void, Never>?
 
     public init(configuration: RendererConfiguration, playback: PlaybackCoordinator, log: DiagnosticLog) {
         self.configuration = configuration
         self.log = log
+        self.rendererState = playback.state
         self.soapHandler = SOAPActionHandler(playback: playback, log: log)
         self.subscriptions = EventSubscriptionManager(state: playback.state)
     }
@@ -47,6 +50,7 @@ public final class UPnPDeviceServer: @unchecked Sendable {
     public func stop() {
         listener?.cancel()
         listener = nil
+        queue.async { [weak self] in self?.playlistImport?.cancel() }
         subscriptions.stop()
     }
 
@@ -99,6 +103,17 @@ public final class UPnPDeviceServer: @unchecked Sendable {
         if method == "GET" || method == "HEAD" {
             response = descriptionResponse(for: request.path)
         } else if method == "POST", request.path.hasSuffix("/control") {
+            if let playlist = soapHandler.playlistRequest(path: request.path, headers: request.headers, body: request.body) {
+                playlistImport?.cancel()
+                let revision = soapHandler.beginPlaylistImport()
+                playlistImport = Task { [weak self] in
+                    guard let self else { connection.cancel(); return }
+                    let result = await self.soapHandler.importPlaylist(uri: playlist.uri, metadata: playlist.metadata,
+                                                                       peer: connection.endpoint, revision: revision)
+                    self.send(result, on: connection)
+                }
+                return
+            }
             response = soapHandler.handle(path: request.path, headers: request.headers, body: request.body)
         } else if method == "SUBSCRIBE" || method == "UNSUBSCRIBE" {
             let event = subscriptions.handle(request, peer: connection.endpoint)
@@ -114,6 +129,21 @@ public final class UPnPDeviceServer: @unchecked Sendable {
 
     private func descriptionResponse(for path: String) -> HTTPResponse {
         switch path {
+        case "/api/v1/audio-format":
+            struct Report: Encodable {
+                let itemID: UUID?
+                let transportState: String
+                let transportStatus: String
+                let stream: StreamAudioFormat?
+            }
+            let snapshot = rendererState.snapshot()
+            let report = Report(itemID: snapshot.itemID, transportState: snapshot.transportState.rawValue,
+                                transportStatus: snapshot.transportStatus, stream: snapshot.audioFormat)
+            guard let bytes = try? JSONEncoder().encode(report) else {
+                return .init(status: 500, reason: "Internal Server Error")
+            }
+            return .init(status: 200, reason: "OK", contentType: "application/json",
+                         body: String(decoding: bytes, as: UTF8.self), extraHeaders: ["Cache-Control": "no-store"])
         case "/", "/device.xml":
             return xml(UPnPDescriptions.device(configuration: configuration))
         case "/upnp/avtransport/scpd.xml":

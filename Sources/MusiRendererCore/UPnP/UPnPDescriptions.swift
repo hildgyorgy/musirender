@@ -1,7 +1,7 @@
 import Foundation
 
 public enum UPnPDescriptions {
-    static let sinkProtocolInfo = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*,http-get:*:audio/aac:*"
+    static let sinkProtocolInfo = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*,http-get:*:audio/aac:*,\(DIDLPlaylist.protocolInfo)"
     public static let deviceType = "urn:schemas-upnp-org:device:MediaRenderer:1"
     public static let avTransportType = "urn:schemas-upnp-org:service:AVTransport:1"
     public static let renderingControlType = "urn:schemas-upnp-org:service:RenderingControl:1"
@@ -52,6 +52,15 @@ public enum UPnPDescriptions {
         <action><name>Previous</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
         <action><name>Pause</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
         <action><name>Stop</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
+        <action><name>GetTransportSettings</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(output("PlayMode", "CurrentPlayMode"))
+          \(output("RecQualityMode", "CurrentRecordQualityMode"))
+        </argumentList></action>
+        <action><name>SetPlayMode</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(input("NewPlayMode", "CurrentPlayMode"))
+        </argumentList></action>
         <action><name>Seek</name><argumentList>
           \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
           \(input("Unit", "A_ARG_TYPE_SeekMode"))
@@ -105,6 +114,8 @@ public enum UPnPDescriptions {
         \(state("RecordStorageMedium", "string", allowed: ["NOT_IMPLEMENTED"]))
         \(state("RecordMediumWriteStatus", "string", allowed: ["NOT_IMPLEMENTED"]))
         \(state("CurrentTransportActions", "string"))
+        \(state("CurrentPlayMode", "string", allowed: ["NORMAL"]))
+        \(state("CurrentRecordQualityMode", "string", allowed: ["NOT_IMPLEMENTED"]))
         \(state("CurrentTrack", "ui4"))
         \(state("CurrentTrackDuration", "string"))
         \(state("CurrentTrackMetaData", "string"))

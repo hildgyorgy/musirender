@@ -79,8 +79,8 @@ debugging.
 Multicast can be affected by Wi-Fi isolation, VPNs, multiple active interfaces,
 firewalls and macOS local-network authorization. The implementation joins every
 active, non-loopback IPv4 multicast interface and chooses the response interface
-whose subnet contains the requester. Milestone 1 enumerates interfaces at
-startup; automatic recovery after an interface change remains stabilization work.
+whose subnet contains the requester. SSDP checks for changed IPv4 interfaces
+every five seconds and refreshes multicast membership after system wake.
 
 Real-device validation must cover Wi-Fi, Ethernet, VPN enabled/disabled, network
 switching and sleep/wake. Packet capture is more useful than optimistic UI state.
