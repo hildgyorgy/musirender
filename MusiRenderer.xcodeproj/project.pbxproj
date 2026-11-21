@@ -186,6 +186,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MusiRender uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.";
+				MACOSX_DEPLOYMENT_TARGET = 26;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.musirenderer.MusiRenderer;
 				PRODUCT_NAME = MusiRender;
@@ -208,6 +209,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MusiRender uses your local network so UPnP controllers can discover and control this Mac as an audio renderer.";
+				MACOSX_DEPLOYMENT_TARGET = 26;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.musirenderer.MusiRenderer;
 				PRODUCT_NAME = MusiRender;
