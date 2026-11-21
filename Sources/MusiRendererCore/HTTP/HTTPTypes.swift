@@ -43,10 +43,11 @@ struct HTTPResponse {
     let headers: [String: String]
     let body: Data
 
-    init(status: Int, reason: String, contentType: String = "text/plain; charset=utf-8", body: String = "") {
+    init(status: Int, reason: String, contentType: String = "text/plain; charset=utf-8", body: String = "",
+         extraHeaders: [String: String] = [:]) {
         self.status = status
         self.reason = reason
-        self.headers = ["Content-Type": contentType]
+        self.headers = extraHeaders.merging(["Content-Type": contentType]) { supplied, _ in supplied }
         self.body = Data(body.utf8)
     }
 

@@ -1,9 +1,8 @@
 # MusiRenderer
 
 MusiRenderer is a native macOS UPnP/DLNA MediaRenderer. The current project is
-the **Milestone 1** discovery skeleton: it advertises a standards-shaped renderer
-on the local network, responds to SSDP searches, and serves its UPnP description
-documents over HTTP.
+the **Milestone 4** build with continuous HTTP playback, two-way seeking and
+UPnP event notifications.
 
 ## Requirements
 
@@ -28,24 +27,40 @@ Core tests can also be run from Terminal:
 swift test
 ```
 
-## Milestone 1 architecture
+## Architecture
 
 - `MusiRendererApp`: menu-bar lifecycle and diagnostics UI
 - `RendererRuntime`: owns the service lifetime; no SwiftUI object owns a socket
 - `SSDPService`: IPv4 multicast advertisements and M-SEARCH responses
 - `UPnPDeviceServer`: small HTTP/1.1 server for device/service descriptions
 - `UPnPDescriptions`: deterministic UPnP XML documents
+- `SOAPActionHandler`: AVTransport, RenderingControl and ConnectionManager actions
+- `EventSubscriptionManager`: GENA subscription lifecycle and state notifications
+- `PlaybackCoordinator`: transport state machine independent of SwiftUI
+- `AVPlayerAudioPlayer`: Apple-native HTTP audio playback adapter
 - `DiagnosticLog`: bounded, redacted in-memory diagnostic stream
 
 The HTTP and SSDP implementations use Apple system frameworks and Darwin
 sockets only. There are no runtime dependencies.
 
-## Deliberate Milestone 1 limits
+## Current playback support
 
-- UPnP control and event URLs exist but return a standards-compatible UPnP
-  `Invalid Action` response or an HTTP not-implemented response.
-- Playback, AVTransport state, GENA subscriptions, artwork and RenderingControl
-  behavior are deferred to later milestones.
+- `SetAVTransportURI`, Play, Pause and Stop
+- transport, media and position polling
+- time-based seeking from a UPnP controller or the menu-bar position slider
+- one prepared next URI via `SetNextAVTransportURI`, with automatic advancement at end of track
+- `Next` consumes the prepared URI. `Previous` returns UPnP error 711 when a track is loaded because the control point owns playlist history.
+- GENA subscriptions and renewal, with AVTransport and RenderingControl `LastChange` events
+- volume and mute on the Master channel
+- ALAC/M4A, MP3 and AAC protocol advertisement
+- authenticated HTTP URLs, preserved without rebuilding their query strings
+
+## Deliberate current limits
+
+- Continuous playback requires the control point to supply each next URI. An empty next URI clears the queue, and playback stops at the end of the last track.
+- The renderer preloads asset information for the next track. Sample-accurate gapless transitions remain a future improvement.
+- GENA accepts HTTP callbacks to the same IPv4 address as the subscribing control point.
+- Artwork and output-device selection are deferred.
 - Discovery currently targets IPv4 home LANs, as required by SSDP interoperability.
 
 ## Diagnostics and privacy

@@ -23,8 +23,10 @@ lifetimes. UPnP action handlers should depend on a renderer-state protocol and a
 playback protocol, so SOAP parsing and state-machine behavior can be tested
 without audio hardware or sockets.
 
-Milestone 1 implements the runtime, HTTP server, SSDP service, deterministic XML
-descriptions and bounded diagnostics. Playback types are intentionally absent.
+Milestone 1 implemented the runtime, HTTP server, SSDP service, deterministic XML
+descriptions and bounded diagnostics. Milestone 2 adds a protocol-driven
+`PlaybackCoordinator`, an AVPlayer adapter and a SOAP action handler without
+coupling any of them to SwiftUI.
 
 ## Decisions
 
@@ -96,7 +98,8 @@ independent control point.
 GENA requires subscription renewal, expiration, callback URL validation,
 sequence numbers, LastChange XML escaping and failure cleanup. It should be a
 dedicated subscription manager driven by committed renderer-state changes, not
-mixed into SOAP action handlers. It is intentionally deferred to Milestone 4.
+mixed into SOAP action handlers. Milestone 4 uses a dedicated subscription
+manager with per-subscriber sequence numbers, timeouts and same-peer callbacks.
 
 ### AVPlayer and authenticated ALAC — high
 

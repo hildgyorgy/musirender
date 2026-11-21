@@ -28,10 +28,12 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var status: Status = .starting
     @Published private(set) var entries: [DiagnosticEntry] = []
+    @Published private(set) var renderer = RendererSnapshot()
 
     let configuration: RendererConfiguration
     private let runtime: RendererRuntime
     private var observerID: UUID?
+    private var stateObserverID: UUID?
     private var terminationObserver: NSObjectProtocol?
 
     init() {
@@ -54,6 +56,9 @@ final class AppModel: ObservableObject {
         observerID = runtime.log.observe { [weak self] snapshot in
             DispatchQueue.main.async { self?.entries = snapshot }
         }
+        stateObserverID = runtime.state.observe { [weak self] snapshot in
+            DispatchQueue.main.async { self?.renderer = snapshot }
+        }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -72,7 +77,22 @@ final class AppModel: ObservableObject {
 
     deinit {
         if let observerID { runtime.log.removeObserver(observerID) }
+        if let stateObserverID { runtime.state.removeObserver(stateObserverID) }
         if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
         runtime.stop()
+    }
+
+    func refreshPlayback() {
+        let snapshot = runtime.playback.currentSnapshot()
+        if renderer != snapshot { renderer = snapshot }
+    }
+
+    func seek(to position: TimeInterval, expectedURI: String) {
+        do {
+            try runtime.playback.seek(to: position, expectedURI: expectedURI)
+        } catch {
+            runtime.log.record("Seek unavailable for the current track or position", level: .warning)
+        }
+        refreshPlayback()
     }
 }

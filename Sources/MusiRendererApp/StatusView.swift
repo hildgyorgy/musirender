@@ -3,6 +3,8 @@ import SwiftUI
 
 struct StatusView: View {
     @ObservedObject var model: AppModel
+    @State private var draftPosition: TimeInterval?
+    @State private var editingURI: String?
 
     private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -25,6 +27,22 @@ struct StatusView: View {
 
             if case let .failed(message) = model.status {
                 Text(message).font(.caption).foregroundStyle(.red)
+            }
+
+            Divider()
+            if !model.renderer.currentURI.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.renderer.title.isEmpty ? "Current track" : model.renderer.title)
+                        .font(.headline).lineLimit(1)
+                    if !model.renderer.artist.isEmpty {
+                        Text(model.renderer.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Text(model.renderer.transportState.rawValue.replacingOccurrences(of: "_", with: " "))
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if model.renderer.duration > 0 {
+                        seekControl
+                    }
+                }
             }
 
             Divider()
@@ -57,6 +75,56 @@ struct StatusView: View {
         }
         .padding(14)
         .frame(width: 430)
+        .task {
+            while !Task.isCancelled {
+                model.refreshPlayback()
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private var seekControl: some View {
+        let track = model.renderer
+        let position = editingURI == track.currentURI ? draftPosition ?? track.position : track.position
+        return VStack(spacing: 4) {
+            Slider(value: Binding(
+                get: { min(position, track.duration) },
+                set: { value in
+                    if editingURI != nil {
+                        draftPosition = value
+                    } else {
+                        model.seek(to: value, expectedURI: track.currentURI)
+                    }
+                }
+            ), in: 0...track.duration, onEditingChanged: { isEditing in
+                if isEditing {
+                    editingURI = track.currentURI
+                    draftPosition = nil
+                } else {
+                    if let editingURI, let draftPosition {
+                        model.seek(to: draftPosition, expectedURI: editingURI)
+                    }
+                    editingURI = nil
+                    draftPosition = nil
+                }
+            }) {
+                Text("Playback position")
+            }
+            .labelsHidden()
+            .disabled(track.transportStatus != "OK")
+
+            HStack {
+                Text(UPnPTime.format(position))
+                Spacer()
+                Text(UPnPTime.format(track.duration))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
     }
 
     private var statusColor: Color {

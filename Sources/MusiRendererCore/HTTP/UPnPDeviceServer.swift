@@ -4,12 +4,16 @@ import Network
 public final class UPnPDeviceServer: @unchecked Sendable {
     private let configuration: RendererConfiguration
     private let log: DiagnosticLog
+    private let soapHandler: SOAPActionHandler
+    private let subscriptions: EventSubscriptionManager
     private let queue = DispatchQueue(label: "com.musirenderer.http")
     private var listener: NWListener?
 
-    public init(configuration: RendererConfiguration, log: DiagnosticLog) {
+    public init(configuration: RendererConfiguration, playback: PlaybackCoordinator, log: DiagnosticLog) {
         self.configuration = configuration
         self.log = log
+        self.soapHandler = SOAPActionHandler(playback: playback, log: log)
+        self.subscriptions = EventSubscriptionManager(state: playback.state)
     }
 
     public func start() throws {
@@ -43,6 +47,7 @@ public final class UPnPDeviceServer: @unchecked Sendable {
     public func stop() {
         listener?.cancel()
         listener = nil
+        subscriptions.stop()
     }
 
     private func accept(_ connection: NWConnection) {
@@ -83,7 +88,7 @@ public final class UPnPDeviceServer: @unchecked Sendable {
             guard parts.count == 2 else { return nil }
             return Int(parts[1].trimmingCharacters(in: .whitespaces))
         } ?? 0
-        return data.count >= range.upperBound + length
+        return length >= 0 && length <= data.count - range.upperBound
     }
 
     private func handle(_ request: HTTPRequest, on connection: NWConnection) {
@@ -94,14 +99,13 @@ public final class UPnPDeviceServer: @unchecked Sendable {
         if method == "GET" || method == "HEAD" {
             response = descriptionResponse(for: request.path)
         } else if method == "POST", request.path.hasSuffix("/control") {
-            response = HTTPResponse(
-                status: 500,
-                reason: "Internal Server Error",
-                contentType: "text/xml; charset=\"utf-8\"",
-                body: UPnPDescriptions.invalidActionSOAP()
-            )
+            response = soapHandler.handle(path: request.path, headers: request.headers, body: request.body)
         } else if method == "SUBSCRIBE" || method == "UNSUBSCRIBE" {
-            response = HTTPResponse(status: 501, reason: "Not Implemented", body: "GENA is planned for Milestone 4.\n")
+            let event = subscriptions.handle(request, peer: connection.endpoint)
+            send(event.0, on: connection) { [weak self] success in
+                if let sid = event.initialSID { self?.subscriptions.finishSubscription(sid, accepted: success) }
+            }
+            return
         } else {
             response = HTTPResponse(status: 405, reason: "Method Not Allowed")
         }
@@ -127,8 +131,10 @@ public final class UPnPDeviceServer: @unchecked Sendable {
         HTTPResponse(status: 200, reason: "OK", contentType: "text/xml; charset=\"utf-8\"", body: body)
     }
 
-    private func send(_ response: HTTPResponse, includeBody: Bool = true, on connection: NWConnection) {
-        connection.send(content: response.serialized(includeBody: includeBody), completion: .contentProcessed { _ in
+    private func send(_ response: HTTPResponse, includeBody: Bool = true, on connection: NWConnection,
+                      completion: (@Sendable (Bool) -> Void)? = nil) {
+        connection.send(content: response.serialized(includeBody: includeBody), completion: .contentProcessed { error in
+            completion?(error == nil)
             connection.cancel()
         })
     }

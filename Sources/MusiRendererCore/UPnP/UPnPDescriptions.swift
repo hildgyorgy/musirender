@@ -1,6 +1,7 @@
 import Foundation
 
 public enum UPnPDescriptions {
+    static let sinkProtocolInfo = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*,http-get:*:audio/aac:*"
     public static let deviceType = "urn:schemas-upnp-org:device:MediaRenderer:1"
     public static let avTransportType = "urn:schemas-upnp-org:service:AVTransport:1"
     public static let renderingControlType = "urn:schemas-upnp-org:service:RenderingControl:1"
@@ -42,8 +43,20 @@ public enum UPnPDescriptions {
           \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
           \(input("Speed", "TransportPlaySpeed"))
         </argumentList></action>
+        <action><name>SetNextAVTransportURI</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(input("NextURI", "NextAVTransportURI"))
+          \(input("NextURIMetaData", "NextAVTransportURIMetaData"))
+        </argumentList></action>
+        <action><name>Next</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
+        <action><name>Previous</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
         <action><name>Pause</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
         <action><name>Stop</name><argumentList>\(input("InstanceID", "A_ARG_TYPE_InstanceID"))</argumentList></action>
+        <action><name>Seek</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(input("Unit", "A_ARG_TYPE_SeekMode"))
+          \(input("Target", "A_ARG_TYPE_SeekTarget"))
+        </argumentList></action>
         <action><name>GetTransportInfo</name><argumentList>
           \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
           \(output("CurrentTransportState", "TransportState"))
@@ -61,6 +74,22 @@ public enum UPnPDescriptions {
           \(output("RelCount", "RelativeCounterPosition"))
           \(output("AbsCount", "AbsoluteCounterPosition"))
         </argumentList></action>
+        <action><name>GetMediaInfo</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(output("NrTracks", "NumberOfTracks"))
+          \(output("MediaDuration", "CurrentMediaDuration"))
+          \(output("CurrentURI", "AVTransportURI"))
+          \(output("CurrentURIMetaData", "AVTransportURIMetaData"))
+          \(output("NextURI", "NextAVTransportURI"))
+          \(output("NextURIMetaData", "NextAVTransportURIMetaData"))
+          \(output("PlayMedium", "PlaybackStorageMedium"))
+          \(output("RecordMedium", "RecordStorageMedium"))
+          \(output("WriteStatus", "RecordMediumWriteStatus"))
+        </argumentList></action>
+        <action><name>GetCurrentTransportActions</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(output("Actions", "CurrentTransportActions"))
+        </argumentList></action>
       </actionList>
       <serviceStateTable>
         \(state("TransportState", "string", allowed: ["STOPPED", "PLAYING", "TRANSITIONING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"]))
@@ -68,6 +97,14 @@ public enum UPnPDescriptions {
         \(state("TransportPlaySpeed", "string", allowed: ["1"]))
         \(state("AVTransportURI", "uri"))
         \(state("AVTransportURIMetaData", "string"))
+        \(state("NextAVTransportURI", "uri"))
+        \(state("NextAVTransportURIMetaData", "string"))
+        \(state("NumberOfTracks", "ui4"))
+        \(state("CurrentMediaDuration", "string"))
+        \(state("PlaybackStorageMedium", "string", allowed: ["NETWORK", "NONE", "NOT_IMPLEMENTED"]))
+        \(state("RecordStorageMedium", "string", allowed: ["NOT_IMPLEMENTED"]))
+        \(state("RecordMediumWriteStatus", "string", allowed: ["NOT_IMPLEMENTED"]))
+        \(state("CurrentTransportActions", "string"))
         \(state("CurrentTrack", "ui4"))
         \(state("CurrentTrackDuration", "string"))
         \(state("CurrentTrackMetaData", "string"))
@@ -77,6 +114,9 @@ public enum UPnPDescriptions {
         \(state("RelativeCounterPosition", "i4"))
         \(state("AbsoluteCounterPosition", "i4"))
         \(state("A_ARG_TYPE_InstanceID", "ui4"))
+        \(state("A_ARG_TYPE_SeekMode", "string", allowed: ["REL_TIME", "ABS_TIME"]))
+        \(state("A_ARG_TYPE_SeekTarget", "string"))
+        \(state("LastChange", "string", evented: true))
       </serviceStateTable>
     </scpd>
     """
@@ -95,11 +135,23 @@ public enum UPnPDescriptions {
           \(input("Channel", "A_ARG_TYPE_Channel"))
           \(input("DesiredVolume", "Volume"))
         </argumentList></action>
+        <action><name>GetMute</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(input("Channel", "A_ARG_TYPE_Channel"))
+          \(output("CurrentMute", "Mute"))
+        </argumentList></action>
+        <action><name>SetMute</name><argumentList>
+          \(input("InstanceID", "A_ARG_TYPE_InstanceID"))
+          \(input("Channel", "A_ARG_TYPE_Channel"))
+          \(input("DesiredMute", "Mute"))
+        </argumentList></action>
       </actionList>
       <serviceStateTable>
         \(state("A_ARG_TYPE_InstanceID", "ui4"))
         \(state("A_ARG_TYPE_Channel", "string", allowed: ["Master"]))
-        <stateVariable sendEvents="yes"><name>Volume</name><dataType>ui2</dataType><allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+        <stateVariable sendEvents="no"><name>Volume</name><dataType>ui2</dataType><allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+        \(state("Mute", "boolean"))
+        \(state("LastChange", "string", evented: true))
       </serviceStateTable>
     </scpd>
     """
@@ -112,20 +164,45 @@ public enum UPnPDescriptions {
           \(output("Source", "SourceProtocolInfo"))
           \(output("Sink", "SinkProtocolInfo"))
         </argumentList></action>
+        <action><name>GetCurrentConnectionIDs</name><argumentList>
+          \(output("ConnectionIDs", "CurrentConnectionIDs"))
+        </argumentList></action>
+        <action><name>GetCurrentConnectionInfo</name><argumentList>
+          \(input("ConnectionID", "A_ARG_TYPE_ConnectionID"))
+          \(output("RcsID", "A_ARG_TYPE_RcsID"))
+          \(output("AVTransportID", "A_ARG_TYPE_AVTransportID"))
+          \(output("ProtocolInfo", "A_ARG_TYPE_ProtocolInfo"))
+          \(output("PeerConnectionManager", "A_ARG_TYPE_ConnectionManager"))
+          \(output("PeerConnectionID", "A_ARG_TYPE_ConnectionID"))
+          \(output("Direction", "A_ARG_TYPE_Direction"))
+          \(output("Status", "A_ARG_TYPE_ConnectionStatus"))
+        </argumentList></action>
       </actionList>
       <serviceStateTable>
-        \(state("SourceProtocolInfo", "string"))
-        \(state("SinkProtocolInfo", "string"))
+        \(state("SourceProtocolInfo", "string", evented: true))
+        \(state("SinkProtocolInfo", "string", evented: true))
+        \(state("CurrentConnectionIDs", "string", evented: true))
+        \(state("A_ARG_TYPE_ConnectionID", "i4"))
+        \(state("A_ARG_TYPE_RcsID", "i4"))
+        \(state("A_ARG_TYPE_AVTransportID", "i4"))
+        \(state("A_ARG_TYPE_ProtocolInfo", "string"))
+        \(state("A_ARG_TYPE_ConnectionManager", "string"))
+        \(state("A_ARG_TYPE_Direction", "string", allowed: ["Input", "Output"]))
+        \(state("A_ARG_TYPE_ConnectionStatus", "string", allowed: ["OK", "ContentFormatMismatch", "InsufficientBandwidth", "UnreliableChannel", "Unknown"]))
       </serviceStateTable>
     </scpd>
     """
 
     public static func invalidActionSOAP() -> String {
+        errorSOAP(code: 401, description: "Invalid Action")
+    }
+
+    public static func errorSOAP(code: Int, description: String) -> String {
         xmlHeader + """
         <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
           <s:Body><s:Fault>
             <faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring>
-            <detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>401</errorCode><errorDescription>Invalid Action</errorDescription></UPnPError></detail>
+            <detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>\(code)</errorCode><errorDescription>\(xmlEscape(description))</errorDescription></UPnPError></detail>
           </s:Fault></s:Body>
         </s:Envelope>
         """
@@ -144,11 +221,11 @@ public enum UPnPDescriptions {
     private static func argument(_ name: String, _ direction: String, _ state: String) -> String {
         "<argument><name>\(name)</name><direction>\(direction)</direction><relatedStateVariable>\(state)</relatedStateVariable></argument>"
     }
-    private static func state(_ name: String, _ type: String, allowed: [String] = []) -> String {
+    private static func state(_ name: String, _ type: String, allowed: [String] = [], evented: Bool = false) -> String {
         let values = allowed.isEmpty ? "" : "<allowedValueList>" + allowed.map { "<allowedValue>\($0)</allowedValue>" }.joined() + "</allowedValueList>"
-        return "<stateVariable sendEvents=\"no\"><name>\(name)</name><dataType>\(type)</dataType>\(values)</stateVariable>"
+        return "<stateVariable sendEvents=\"\(evented ? "yes" : "no")\"><name>\(name)</name><dataType>\(type)</dataType>\(values)</stateVariable>"
     }
-    private static func xmlEscape(_ value: String) -> String {
+    static func xmlEscape(_ value: String) -> String {
         value.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")

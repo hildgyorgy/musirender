@@ -3,6 +3,8 @@ import Foundation
 public final class RendererRuntime: @unchecked Sendable {
     public let configuration: RendererConfiguration
     public let log: DiagnosticLog
+    public let state: RendererState
+    public let playback: PlaybackCoordinator
 
     private let httpServer: UPnPDeviceServer
     private let ssdpService: SSDPService
@@ -12,7 +14,11 @@ public final class RendererRuntime: @unchecked Sendable {
     public init(configuration: RendererConfiguration, log: DiagnosticLog = DiagnosticLog()) {
         self.configuration = configuration
         self.log = log
-        self.httpServer = UPnPDeviceServer(configuration: configuration, log: log)
+        let state = RendererState()
+        self.state = state
+        let playback = PlaybackCoordinator(state: state, log: log)
+        self.playback = playback
+        self.httpServer = UPnPDeviceServer(configuration: configuration, playback: playback, log: log)
         self.ssdpService = SSDPService(configuration: configuration, log: log)
     }
 

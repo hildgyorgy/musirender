@@ -4,6 +4,7 @@ import Foundation
 public final class SSDPService: @unchecked Sendable {
     private static let multicastAddress = "239.255.255.250"
     private static let port: UInt16 = 1900
+    private static let configurationID: UInt32 = 4
 
     private let configuration: RendererConfiguration
     private let log: DiagnosticLog
@@ -147,7 +148,7 @@ public final class SSDPService: @unchecked Sendable {
         ST: \(target.notificationType)\r
         USN: \(target.usn)\r
         BOOTID.UPNP.ORG: \(bootID)\r
-        CONFIGID.UPNP.ORG: 1\r
+        CONFIGID.UPNP.ORG: \(Self.configurationID)\r
         \r
 
         """
@@ -176,7 +177,7 @@ public final class SSDPService: @unchecked Sendable {
                     "NTS: \(subtype)",
                     "USN: \(target.usn)",
                     "BOOTID.UPNP.ORG: \(bootID)",
-                    "CONFIGID.UPNP.ORG: 1"
+                    "CONFIGID.UPNP.ORG: \(Self.configurationID)"
                 ]
                 if subtype == "ssdp:alive" {
                     lines.append("CACHE-CONTROL: max-age=1800")
