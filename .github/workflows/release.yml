@@ -1,0 +1,161 @@
+name: Publish MusiRender DMG
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.deleted == false
+    runs-on: macos-26
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test and build the tagged version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must look like v0.2.0"
+            exit 1
+          fi
+          [[ "$(uname -m)" == arm64 ]]
+          version="${GITHUB_REF_NAME#v}"
+          work="$RUNNER_TEMP/musirender-release"
+          mkdir -p "$work"
+          xcodebuild -version
+          swift test --scratch-path "$work/swift-tests"
+          xcodebuild -project MusiRenderer.xcodeproj -scheme MusiRenderer \
+            -configuration Release -destination 'generic/platform=macOS' \
+            -derivedDataPath "$work/build" CODE_SIGNING_ALLOWED=NO build
+
+          app="$work/build/Build/Products/Release/MusiRender.app"
+          build_version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")
+          if [[ "$build_version" != "$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match app version $build_version"
+            exit 1
+          fi
+          [[ "$(lipo -archs "$app/Contents/MacOS/MusiRender")" == arm64 ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$app/Contents/Info.plist")" == 26.0 ]]
+
+      - name: Sign, notarize and verify the DMG
+        shell: bash
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          for name in DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing Actions secret $name"
+              exit 1
+            fi
+          done
+
+          version="${GITHUB_REF_NAME#v}"
+          work="$RUNNER_TEMP/musirender-release"
+          keychain="$work/signing.keychain-db"
+          certificate="$work/signing.p12"
+          mountpoint="$work/verify"
+          mounted=false
+          cleanup() {
+            if [[ "$mounted" == true ]]; then hdiutil detach "$mountpoint" -quiet || true; fi
+            security delete-keychain "$keychain" || true
+            rm -f "$certificate"
+          }
+          trap cleanup EXIT
+          umask 077
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 -D > "$certificate"
+          keychain_password=$(openssl rand -hex 32)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -f pkcs12 -t cert -k "$keychain" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          rm "$certificate"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk '/"Developer ID Application:/ { print $2 }')
+          if [[ ! "$identity" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+            echo "::error::The P12 must contain one valid Developer ID Application identity and its private key"
+            exit 1
+          fi
+
+          app="$work/build/Build/Products/Release/MusiRender.app"
+          codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$identity" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          team=$(codesign -dv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+          [[ "$team" =~ ^[A-Z0-9]{10}$ ]]
+          auth=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$team")
+
+          notarize() {
+            local file="$1" report="$2" submission
+            printf 'Submitting %s for notarization\n' "$(basename "$file")"
+            if xcrun notarytool submit "$file" "${auth[@]}" --wait --timeout 20m --output-format json > "$report" &&
+               [[ "$(plutil -extract status raw -o - "$report")" == Accepted ]]; then
+              printf 'Apple accepted %s\n' "$(basename "$file")"
+              return
+            fi
+            cat "$report"
+            submission=$(plutil -extract id raw -o - "$report" 2>/dev/null || true)
+            if [[ -n "$submission" ]]; then xcrun notarytool log "$submission" "${auth[@]}" || true; fi
+            return 1
+          }
+
+          ditto -c -k --keepParent "$app" "$work/MusiRender.zip"
+          notarize "$work/MusiRender.zip" "$work/app-notary.json"
+          xcrun stapler staple "$app"
+
+          image_root="$work/image"
+          mkdir "$image_root" "$mountpoint"
+          ditto "$app" "$image_root/MusiRender.app"
+          ln -s /Applications "$image_root/Applications"
+          notes="docs/RELEASE_$version.md"
+          if [[ -f "$notes" ]]; then
+            sed -E 's/^#{1,2} //; s/`//g' "$notes" > "$image_root/Release Notes.txt"
+          else
+            printf 'MusiRender %s\n\nRequires Apple silicon and macOS 26 or later.\nDrag MusiRender.app into Applications.\n' "$version" > "$image_root/Release Notes.txt"
+          fi
+
+          dmg="$work/MusiRender-$version.dmg"
+          hdiutil create -quiet -volname "MusiRender $version" -fs HFS+ -format UDZO -srcfolder "$image_root" "$dmg"
+          codesign --timestamp --keychain "$keychain" --sign "$identity" \
+            --identifier org.musirenderer.MusiRender.diskimage "$dmg"
+          notarize "$dmg" "$work/dmg-notary.json"
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          hdiutil verify "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint" -quiet
+          mounted=true
+          xcrun stapler validate "$mountpoint/MusiRender.app"
+          syspolicy_check distribution "$mountpoint/MusiRender.app"
+          [[ "$(readlink "$mountpoint/Applications")" == /Applications ]]
+          cmp "$mountpoint/Release Notes.txt" "$image_root/Release Notes.txt"
+
+      - name: Publish the verified installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dmg="$RUNNER_TEMP/musirender-release/MusiRender-$version.dmg"
+          notes="docs/RELEASE_$version.md"
+          if [[ -f "$notes" ]]; then
+            release_notes=(--notes-file "$notes")
+          else
+            release_notes=(--generate-notes)
+          fi
+          gh release create "$GITHUB_REF_NAME" "$dmg" --verify-tag \
+            --title "MusiRender $version" "${release_notes[@]}"

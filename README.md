@@ -107,6 +107,11 @@ A controller can poll it after a track change and retry if `stream` is absent.
 The [PCM measurement workflow](docs/BIT_PERFECT.md) includes test signals and
 a sample-by-sample comparison for digital captures.
 
+## Releases
+
+GitHub Actions builds and publishes the notarized DMG from a version tag.
+See [Publishing a version](docs/RELEASING.md) for the one-time setup.
+
 ## Deliberate current limits
 
 - SOAP requests use `Content-Length`. The server supports `Expect: 100-continue`
