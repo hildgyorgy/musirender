@@ -48,3 +48,5 @@ MusiRender DMG** for progress. A successful run publishes a release named
 `MusiRender <version>` with the signed DMG attached. If an unpublished run
 fails because a secret was missing or an Apple service was unavailable, fix
 the cause and rerun it in Actions. The workflow preserves existing releases.
+If the workflow itself needs a fix, push the fix to `main` and use **Run
+workflow** with the existing version tag to build the tagged source again.
