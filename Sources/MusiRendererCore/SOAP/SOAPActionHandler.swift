@@ -146,6 +146,8 @@ final class SOAPActionHandler: @unchecked Sendable {
             return fault(code: 701, description: "Transition Not Available")
         } catch PlaybackCoordinator.PlaybackError.invalidSeekTarget {
             return fault(code: 711, description: "Illegal Seek Target")
+        } catch PlaybackCoordinator.PlaybackError.outputUnavailable {
+            return fault(code: 701, description: "Selected audio output unavailable")
         } catch {
             return fault(code: 501, description: "Action Failed")
         }

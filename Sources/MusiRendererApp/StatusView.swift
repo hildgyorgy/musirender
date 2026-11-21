@@ -57,15 +57,21 @@ struct StatusView: View {
             VStack(alignment: .leading, spacing: 4) {
                 let source = ([model.sourceName ?? "—"] + audioDetails(model.renderer.audioFormat)).joined(separator: " • ")
                 Text("SOURCE: \(source)").lineLimit(1).help(source)
-                let output = model.outputName ?? "Unavailable"
+                let output = outputDetails
                 Text("OUTPUT: \(output)").lineLimit(1).help(output)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if model.selectedOutputUID != nil, model.activeOutput == nil {
+                Text("Selected audio output is disconnected.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if model.renderer.duration > 0 {
                 seekControl
             }
-            if model.renderer.transportStatus == "ERROR_OCCURRED" {
+            if let error = model.renderer.sampleRateError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            } else if model.renderer.transportStatus == "ERROR_OCCURRED" {
                 Text("Playback interrupted. Press Play to retry from the beginning.")
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -77,6 +83,7 @@ struct StatusView: View {
                 diagnostics
             }
             DisclosureGroup("Settings", isExpanded: $showsSettings) {
+                audioOutputSettings
                 Toggle("Launch at login", isOn: Binding(
                     get: { model.loginStatus == .enabled || model.loginStatus == .requiresApproval },
                     set: model.setLaunchAtLogin
@@ -106,7 +113,6 @@ struct StatusView: View {
             model.refreshLoginStatus()
             while !Task.isCancelled {
                 model.refreshPlayback()
-                model.refreshStatus()
                 do {
                     try await Task.sleep(for: .milliseconds(500))
                 } catch {
@@ -145,6 +151,49 @@ struct StatusView: View {
         return fields
     }
 
+    private var outputDetails: String {
+        guard let name = model.activeOutput?.name else { return "Unavailable" }
+        guard let rate = model.outputSampleRate else { return name }
+        return "\(name) • \((rate / 1000).formatted()) kHz"
+    }
+
+    private var audioOutputSettings: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Audio output", selection: Binding(
+                get: { model.selectedOutputUID },
+                set: model.selectAudioOutput
+            )) {
+                Text("System Default").tag(nil as String?)
+                ForEach(model.audioOutputs, id: \.uid) { output in
+                    Text(output.name).tag(Optional(output.uid))
+                }
+                if let uid = model.selectedOutputUID, model.activeOutput == nil {
+                    Text("Selected output disconnected").tag(Optional(uid))
+                }
+            }
+            .disabled(!model.canChangeAudioOutput)
+            Toggle("Fixed digital volume (100%)", isOn: Binding(
+                get: { model.fixedVolume },
+                set: model.setFixedVolume
+            ))
+            .disabled(!model.canChangeAudioOutput || model.selectedOutputUID == nil)
+            Toggle("Match source sample rate", isOn: Binding(
+                get: { model.matchesSourceSampleRate },
+                set: model.setMatchesSourceSampleRate
+            ))
+            .disabled(!model.canChangeAudioOutput || model.selectedOutputUID == nil)
+            .help("Switch the selected device to the track’s sample rate before playback. Tracks with different rates require a brief pause.")
+            if model.fixedVolume {
+                Text("Adjust listening volume on the DAC or amplifier.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = model.outputError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .padding(.top, 6)
+    }
+
     private var controls: some View {
         let track = model.renderer
         let active = track.transportState == .playing || track.transportState == .transitioning
@@ -152,7 +201,7 @@ struct StatusView: View {
             Button(action: model.togglePlayback) {
                 Label(active ? "Pause" : "Play", systemImage: active ? "pause.fill" : "play.fill")
             }
-            .disabled(track.currentURI.isEmpty)
+            .disabled(track.currentURI.isEmpty || (!active && model.selectedOutputUID != nil && model.activeOutput == nil))
             Button(action: model.stopPlayback) { Label("Stop", systemImage: "stop.fill") }
                 .disabled(track.currentURI.isEmpty)
             Button(action: model.nextTrack) { Label("Next", systemImage: "forward.end.fill") }
@@ -161,12 +210,14 @@ struct StatusView: View {
             Button(action: model.toggleMute) {
                 Label(track.isMuted ? "Unmute" : "Mute", systemImage: track.isMuted ? "speaker.slash" : "speaker.wave.2")
             }
+            .disabled(model.fixedVolume)
             Slider(value: Binding(get: { Double(model.renderer.volume) },
                                   set: { model.setVolume(UInt16($0.rounded())) }), in: 0...100) {
                 Text("Volume")
             }
             .labelsHidden()
             .frame(width: 96)
+            .disabled(model.fixedVolume)
         }
         .labelStyle(.iconOnly)
     }

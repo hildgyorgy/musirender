@@ -33,7 +33,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var status: Status = .starting
     @Published private(set) var entries: [DiagnosticEntry] = []
     @Published private(set) var renderer = RendererSnapshot()
-    @Published private(set) var outputName = DefaultAudioOutput.currentName()
+    @Published private(set) var audioOutputs: [AudioOutput] = []
+    @Published private(set) var activeOutput: AudioOutput?
+    @Published private(set) var outputSampleRate: Double?
+    @Published private(set) var selectedOutputUID: String?
+    @Published private(set) var fixedVolume = false
+    @Published private(set) var matchesSourceSampleRate = false
+    @Published private(set) var outputError: String?
     @Published private(set) var sourceName: String?
     @Published private(set) var artworkImage: NSImage?
     @Published private(set) var loginStatus = SMAppService.mainApp.status
@@ -42,7 +48,7 @@ final class AppModel: ObservableObject {
     let configuration: RendererConfiguration
     private let runtime: RendererRuntime
     private let nowPlaying: SystemNowPlaying
-    private var defaultAudioOutput: DefaultAudioOutput?
+    private var audioOutputMonitor: AudioOutputs?
     private var observerID: UUID?
     private var stateObserverID: UUID?
     private var terminationObserver: NSObjectProtocol?
@@ -69,10 +75,24 @@ final class AppModel: ObservableObject {
         )
         runtime = RendererRuntime(configuration: configuration)
         nowPlaying = SystemNowPlaying(playback: runtime.playback)
-        defaultAudioOutput = DefaultAudioOutput { [weak self] name in
-            self?.updateOutputName(name)
+        audioOutputMonitor = AudioOutputs { [weak self] in
+            self?.refreshAudioOutputs()
         }
-        updateOutputName(DefaultAudioOutput.currentName())
+        selectedOutputUID = defaults.string(forKey: "audioOutputUID")
+        refreshAudioOutputs()
+        do {
+            try runtime.playback.selectOutput(uid: selectedOutputUID, available: activeOutput != nil)
+            if selectedOutputUID != nil, defaults.bool(forKey: "fixedAudioVolume") {
+                try runtime.playback.setFixedVolume(true)
+                fixedVolume = true
+            }
+            if let uid = selectedOutputUID, defaults.bool(forKey: "matchSourceSampleRate") {
+                try runtime.playback.setOutputSampleRateControl(AudioOutputs.sampleRateControl(for: uid))
+                matchesSourceSampleRate = true
+            }
+        } catch {
+            outputError = "Could not restore the audio output settings."
+        }
 
         observerID = runtime.log.observe { [weak self] snapshot in
             DispatchQueue.main.async { self?.entries = snapshot }
@@ -97,12 +117,14 @@ final class AppModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self, runtime] in
             do {
-                try runtime.start { message in
+                try runtime.start(onLANAvailabilityChange: { [weak self] in
+                    DispatchQueue.main.async { self?.refreshStatus() }
+                }) { message in
                     DispatchQueue.main.async { self?.status = .failed(message) }
                 }
-                let readyStatus: Status = runtime.hasLANInterface ? .online : .waitingForLAN
-                DispatchQueue.main.async {
-                    if self?.status == .starting { self?.status = readyStatus }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.status == .starting else { return }
+                    self.status = runtime.hasLANInterface ? .online : .waitingForLAN
                 }
             } catch {
                 let message = error.localizedDescription
@@ -160,7 +182,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshStatus() {
+    private func refreshStatus() {
         switch status {
         case .online, .waitingForLAN:
             let actual: Status = runtime.hasLANInterface ? .online : .waitingForLAN
@@ -170,8 +192,68 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func updateOutputName(_ name: String?) {
-        if outputName != name { outputName = name }
+    var canChangeAudioOutput: Bool {
+        renderer.transportState == .stopped || renderer.transportState == .noMediaPresent
+    }
+
+    func selectAudioOutput(_ uid: String?) {
+        guard uid != selectedOutputUID else { return }
+        do {
+            try runtime.playback.selectOutput(uid: uid, available: audioOutputs.contains { $0.uid == uid })
+            selectedOutputUID = uid
+            fixedVolume = false
+            matchesSourceSampleRate = false
+            UserDefaults.standard.set(uid, forKey: "audioOutputUID")
+            UserDefaults.standard.removeObject(forKey: "fixedAudioVolume")
+            UserDefaults.standard.removeObject(forKey: "matchSourceSampleRate")
+            outputError = nil
+            refreshAudioOutputs()
+            refreshPlayback()
+        } catch {
+            outputError = "Stop playback before changing the audio output."
+        }
+    }
+
+    func setFixedVolume(_ enabled: Bool) {
+        do {
+            try runtime.playback.setFixedVolume(enabled)
+            fixedVolume = enabled
+            UserDefaults.standard.set(enabled, forKey: "fixedAudioVolume")
+            outputError = nil
+            refreshPlayback()
+        } catch {
+            outputError = "Stop playback and select a dedicated audio output to change fixed volume."
+        }
+    }
+
+    func setMatchesSourceSampleRate(_ enabled: Bool) {
+        guard let uid = selectedOutputUID else { return }
+        do {
+            let control = enabled ? AudioOutputs.sampleRateControl(for: uid) : nil
+            try runtime.playback.setOutputSampleRateControl(control)
+            matchesSourceSampleRate = enabled
+            UserDefaults.standard.set(enabled, forKey: "matchSourceSampleRate")
+            outputError = nil
+        } catch {
+            outputError = "Stop playback before changing automatic sample-rate matching."
+        }
+    }
+
+    private func refreshAudioOutputs() {
+        guard let devices = AudioOutputs.list() else { return }
+        if audioOutputs != devices { audioOutputs = devices }
+        let output: AudioOutput?
+        if let uid = selectedOutputUID {
+            output = devices.first { $0.uid == uid }
+            runtime.playback.updateOutputAvailability(uid: uid, available: output != nil)
+        } else {
+            let id = AudioOutputs.defaultDeviceID
+            output = devices.first { $0.id == id }
+        }
+        audioOutputMonitor?.observeRate(for: output?.id)
+        if activeOutput != output { activeOutput = output }
+        let rate = output?.nominalSampleRate
+        if outputSampleRate != rate { outputSampleRate = rate }
     }
 
     func togglePlayback() {

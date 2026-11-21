@@ -14,6 +14,7 @@ public final class SSDPService: @unchecked Sendable {
     private var readSource: DispatchSourceRead?
     private var advertisementTimer: DispatchSourceTimer?
     private var interfaces: [IPv4Interface] = []
+    private var onLANAvailabilityChange: (@Sendable () -> Void)?
     private var lastAdvertisement = DispatchTime(uptimeNanoseconds: 0)
     private var mediaServers: [URL: Date] = [:]
     private static let mediaServerTarget = "urn:schemas-upnp-org:device:MediaServer:1"
@@ -23,11 +24,11 @@ public final class SSDPService: @unchecked Sendable {
         self.log = log
     }
 
-    public func start() throws {
-        try queue.sync { try startOnQueue() }
+    public func start(onLANAvailabilityChange: @escaping @Sendable () -> Void = {}) throws {
+        try queue.sync { try startOnQueue(onLANAvailabilityChange: onLANAvailabilityChange) }
     }
 
-    private func startOnQueue() throws {
+    private func startOnQueue(onLANAvailabilityChange: @escaping @Sendable () -> Void) throws {
         guard socketDescriptor < 0 else { return }
 
         let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
@@ -52,6 +53,7 @@ public final class SSDPService: @unchecked Sendable {
         advertisementTimer = timer
         timer.resume()
 
+        self.onLANAvailabilityChange = onLANAvailabilityChange
         log.record("SSDP listening on UDP port 1900")
         refreshInterfaces()
     }
@@ -66,6 +68,7 @@ public final class SSDPService: @unchecked Sendable {
             readSource = nil
             socketDescriptor = -1
             interfaces = []
+            onLANAvailabilityChange = nil
             mediaServers.removeAll()
         }
     }
@@ -133,6 +136,9 @@ public final class SSDPService: @unchecked Sendable {
         if previous != interfaces {
             let addresses = interfaces.map { "\($0.name)=\($0.addressString)" }.joined(separator: ", ")
             log.record(addresses.isEmpty ? "SSDP is waiting for a LAN interface" : "SSDP interfaces: \(addresses)")
+        }
+        if previous.isEmpty != interfaces.isEmpty {
+            onLANAvailabilityChange?()
         }
         if !interfaces.isEmpty && (rejoin || previous != interfaces || .now() >= lastAdvertisement + .seconds(600)) {
             lastAdvertisement = .now()

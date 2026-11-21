@@ -24,6 +24,17 @@ opens a separate compact player. The renderer can run with both views closed.
 macOS Now Playing shows the active track and provides system media controls.
 To use Launch at Login outside development, keep the app at a stable path.
 
+Under **Settings**, choose **System Default** or a specific audio output while
+playback is stopped. The **Output** line includes the device’s nominal sample
+rate when Core Audio reports it. For a selected device, **Fixed digital volume
+(100%)** leaves listening volume to the DAC or amplifier and locks the
+renderer’s volume and mute controls, including UPnP commands. If the selected
+device disconnects, playback stops and requires an explicit Play to resume.
+**Match source sample rate** is optional for a selected device. The renderer
+waits for Core Audio to confirm the new rate before playing. Tracks whose
+sample rates match can still be queued for gapless playback. Tracks that
+require a rate change can have a brief pause between them.
+
 Core tests can also be run from Terminal:
 
 ```sh
@@ -98,7 +109,7 @@ A controller can poll it after a track change and retry if `stream` is absent.
 - The renderer queues the next audio item in AVQueuePlayer before the current
   track ends. Seamlessness depends on the stream, audio format and buffering.
 - GENA accepts HTTP callbacks to the same IPv4 address as the subscribing control point.
-- Output-device selection and bit-perfect output verification are deferred.
+- Exclusive device access and bit-perfect output verification are deferred.
 - If an audio stream fails permanently, Play retries from the start of the
   current track and retains the queued next URI.
 - Discovery currently targets IPv4 home LANs, as required by SSDP interoperability.

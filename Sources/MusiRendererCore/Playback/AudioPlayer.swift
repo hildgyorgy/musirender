@@ -10,7 +10,7 @@ enum AudioPlaybackEvent {
     case ended
     case queueAdvanced
     case failed(String)
-    case audioFormat(StreamAudioFormat)
+    case audioFormat(StreamAudioFormat?)
 }
 
 protocol AudioPlayer: AnyObject {
@@ -27,6 +27,7 @@ protocol AudioPlayer: AnyObject {
     func seek(to position: TimeInterval)
     func setVolume(_ value: Float)
     func setMuted(_ value: Bool)
+    func setOutputDevice(uid: String?)
 }
 
 final class AVPlayerAudioPlayer: AudioPlayer, @unchecked Sendable {
@@ -144,13 +145,11 @@ final class AVPlayerAudioPlayer: AudioPlayer, @unchecked Sendable {
             switch item.status {
             case .readyToPlay:
                 self.onEvent?(id, .ready)
-                if let track = item.tracks.lazy.filter(\.isEnabled).compactMap(\.assetTrack)
-                    .first(where: { $0.mediaType == .audio }) {
-                    Task { [weak self] in
-                        if let format = await StreamAudioFormat.read(from: track) {
-                            self?.onEvent?(id, .audioFormat(format))
-                        }
-                    }
+                let track = item.tracks.lazy.filter(\.isEnabled).compactMap(\.assetTrack)
+                    .first(where: { $0.mediaType == .audio })
+                Task { [weak self] in
+                    let format = if let track { await StreamAudioFormat.read(from: track) } else { nil as StreamAudioFormat? }
+                    self?.onEvent?(id, .audioFormat(format))
                 }
             case .failed:
                 let error = item.error as NSError?
@@ -197,4 +196,6 @@ final class AVPlayerAudioPlayer: AudioPlayer, @unchecked Sendable {
 
     func setVolume(_ value: Float) { player.volume = min(1, max(0, value)) }
     func setMuted(_ value: Bool) { player.isMuted = value }
+
+    func setOutputDevice(uid: String?) { player.audioOutputDeviceUniqueID = uid }
 }

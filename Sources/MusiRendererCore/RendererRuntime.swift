@@ -22,7 +22,10 @@ public final class RendererRuntime: @unchecked Sendable {
         self.ssdpService = SSDPService(configuration: configuration, log: log)
     }
 
-    public func start(onFailure: @escaping @Sendable (String) -> Void = { _ in }) throws {
+    public func start(
+        onLANAvailabilityChange: @escaping @Sendable () -> Void = {},
+        onFailure: @escaping @Sendable (String) -> Void = { _ in }
+    ) throws {
         try lock.withLock {
             guard !running else { return }
             do {
@@ -32,7 +35,7 @@ public final class RendererRuntime: @unchecked Sendable {
                     self.stop()
                     onFailure(message)
                 }
-                try ssdpService.start()
+                try ssdpService.start(onLANAvailabilityChange: onLANAvailabilityChange)
                 running = true
                 log.record("Renderer online as \(configuration.friendlyName), UDN=uuid:\(configuration.uuid.uuidString.lowercased())")
             } catch {
@@ -59,6 +62,7 @@ public final class RendererRuntime: @unchecked Sendable {
     public func refreshAfterWake() { ssdpService.refreshAfterWake() }
 
     public func mediaSourceName(for stream: URL) async -> String? {
+        if Self.isMusiCardsNavidromeStream(stream) { return "Navidrome" }
         if let location = await ssdpService.mediaServerLocation(for: stream),
            let name = await readMediaServerName(at: location) { return name }
         guard !Task.isCancelled,
@@ -66,6 +70,16 @@ public final class RendererRuntime: @unchecked Sendable {
               let location = await ssdpService.mediaServerLocation(for: destination),
               !Task.isCancelled else { return nil }
         return await readMediaServerName(at: location)
+    }
+
+    static func isMusiCardsNavidromeStream(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              components.host != nil, components.path.hasSuffix("/rest/stream.view"),
+              let query = components.queryItems else { return false }
+        return query.contains { $0.name == "c" && $0.value == "MusiCards" } &&
+            query.contains { $0.name == "format" && $0.value == "raw" } &&
+            query.contains { $0.name == "id" && $0.value?.isEmpty == false }
     }
 
     private func mediaRedirectTarget(for stream: URL) async -> URL? {

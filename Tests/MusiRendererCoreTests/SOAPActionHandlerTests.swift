@@ -3,6 +3,116 @@ import Foundation
 import XCTest
 
 final class SOAPActionHandlerTests: XCTestCase {
+    func testRateMatchingKeepsSameRateQueuedAndSwitchesBeforePlayingDifferentRate() async throws {
+        let player = FakeAudioPlayer()
+        let output = TestSampleRateOutput()
+        let playback = PlaybackCoordinator(
+            state: RendererState(), player: player, log: DiagnosticLog(),
+            readSourceRate: { $0.lastPathComponent == "second" ? 44_100 : 96_000 }
+        )
+        try playback.selectOutput(uid: "test-dac", available: true)
+        try playback.setOutputSampleRateControl(OutputSampleRateControl(
+            read: { output.rate }, request: { output.request($0) }
+        ))
+        try playback.setURI("http://example.test/first", metadata: "")
+        try playback.setNextURI("http://example.test/second", metadata: "")
+        try playback.play()
+        XCTAssertEqual(player.playCalls, 0)
+        player.emit(.audioFormat(pcmFormat(at: 44_100)))
+        try await waitFor { playback.currentSnapshot().transportState == .playing && player.preloadedURL != nil }
+        XCTAssertEqual(player.preloadedURL?.lastPathComponent, "second")
+        XCTAssertEqual(output.requests, [44_100])
+
+        player.finishNaturally()
+        _ = playback.currentSnapshot()
+        player.emit(.audioFormat(pcmFormat(at: 44_100)))
+        try playback.setNextURI("http://example.test/third", metadata: "")
+        XCTAssertNil(player.preloadedURL)
+        XCTAssertEqual(player.playCalls, 1)
+
+        player.finishNaturally()
+        try await waitFor { playback.currentSnapshot().currentURI.hasSuffix("/third") }
+        XCTAssertEqual(player.playCalls, 1)
+        player.emit(.audioFormat(pcmFormat(at: 96_000)))
+        try await waitFor { playback.currentSnapshot().transportState == .playing }
+        XCTAssertEqual(output.requests, [44_100, 96_000])
+        XCTAssertEqual(player.playCalls, 2)
+    }
+
+    func testUnsupportedOutputRateDoesNotPlay() throws {
+        let player = FakeAudioPlayer()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
+        try playback.selectOutput(uid: "test-dac", available: true)
+        try playback.setOutputSampleRateControl(OutputSampleRateControl(read: { 48_000 }, request: { _ in false }))
+        try playback.setURI("http://example.test/track", metadata: "")
+        try playback.play()
+        player.emit(.audioFormat(pcmFormat(at: 96_000)))
+        let state = playback.currentSnapshot()
+        XCTAssertEqual(state.transportState, .stopped)
+        XCTAssertNotNil(state.sampleRateError)
+        XCTAssertEqual(player.playCalls, 0)
+    }
+
+    private func pcmFormat(at rate: Double) -> StreamAudioFormat {
+        StreamAudioFormat(codec: "PCM", sampleRateHz: rate, bitDepth: 16, channels: 2, estimatedBitrateBps: nil)
+    }
+
+    private func waitFor(_ condition: () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Playback did not reach the expected state")
+    }
+
+    func testDedicatedOutputPausesOnDisconnectAndDoesNotResumeAutomatically() throws {
+        let player = FakeAudioPlayer()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
+        try playback.selectOutput(uid: "test-dac", available: false)
+        try playback.setURI("http://example.test/track", metadata: "")
+        XCTAssertThrowsError(try playback.play())
+        XCTAssertEqual(player.playCalls, 0)
+        playback.updateOutputAvailability(uid: "test-dac", available: true)
+        try playback.play()
+        XCTAssertThrowsError(try playback.selectOutput(uid: nil, available: true))
+        XCTAssertThrowsError(try playback.setFixedVolume(true))
+        playback.updateOutputAvailability(uid: "test-dac", available: false)
+        XCTAssertEqual(playback.currentSnapshot().transportState, .stopped)
+        XCTAssertEqual(player.outputUID, "test-dac")
+        playback.updateOutputAvailability(uid: "test-dac", available: true)
+        XCTAssertEqual(player.playCalls, 1)
+        try playback.play()
+        XCTAssertEqual(player.playCalls, 2)
+    }
+
+    func testFixedVolumeIgnoresRenderingControlAndClearsOnRouteChange() throws {
+        let player = FakeAudioPlayer()
+        let log = DiagnosticLog()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: log)
+        let handler = SOAPActionHandler(playback: playback, log: log)
+        XCTAssertThrowsError(try playback.setFixedVolume(true))
+        playback.setVolume(35)
+        playback.setMuted(true)
+        try playback.selectOutput(uid: "test-dac", available: true)
+        try playback.setFixedVolume(true)
+
+        func send(_ action: String, _ arguments: String = "") -> HTTPResponse {
+            handler.handle(path: "/upnp/renderingcontrol/control",
+                           headers: ["soapaction": "\(UPnPDescriptions.renderingControlType)#\(action)"],
+                           body: soap(action: action, arguments: "<InstanceID>0</InstanceID>" + arguments))
+        }
+        XCTAssertEqual(send("SetVolume", "<DesiredVolume>20</DesiredVolume>").status, 200)
+        XCTAssertEqual(send("SetMute", "<DesiredMute>1</DesiredMute>").status, 200)
+        XCTAssertEqual(send("SelectPreset", "<PresetName>FactoryDefaults</PresetName>").status, 200)
+        XCTAssertTrue(String(decoding: send("GetVolume").body, as: UTF8.self).contains("<CurrentVolume>100</CurrentVolume>"))
+        XCTAssertEqual(player.volume, 1)
+        XCTAssertFalse(player.muted)
+        try playback.selectOutput(uid: nil, available: true)
+        XCTAssertNil(player.outputUID)
+        XCTAssertEqual(player.volume, 0.35)
+        XCTAssertTrue(player.muted)
+    }
+
     func testCapabilitiesPresetsAndCDATA() throws {
         let log = DiagnosticLog()
         let player = FakeAudioPlayer()
@@ -294,6 +404,7 @@ private final class FakeAudioPlayer: AudioPlayer {
     var preloadedURL: URL?
     var stagedID: UUID?
     var playCalls = 0
+    var outputUID: String?
     var currentItemID: UUID? { itemID }
 
     func prepare(url: URL, id: UUID) {
@@ -334,8 +445,22 @@ private final class FakeAudioPlayer: AudioPlayer {
     func seek(to position: TimeInterval) { seekTarget = position }
     func setVolume(_ value: Float) { volume = value }
     func setMuted(_ value: Bool) { muted = value }
+    func setOutputDevice(uid: String?) { outputUID = uid }
 
-    private func emit(_ event: AudioPlaybackEvent) {
+    func emit(_ event: AudioPlaybackEvent) {
         if let itemID { onEvent?(itemID, event) }
+    }
+}
+
+private final class TestSampleRateOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requestedRates = [Double]()
+
+    var rate: Double { lock.withLock { requestedRates.last ?? 48_000 } }
+    var requests: [Double] { lock.withLock { requestedRates } }
+
+    func request(_ rate: Double) -> Bool {
+        lock.withLock { requestedRates.append(rate) }
+        return true
     }
 }

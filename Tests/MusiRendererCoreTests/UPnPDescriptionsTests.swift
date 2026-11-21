@@ -3,6 +3,15 @@ import Foundation
 import XCTest
 
 final class UPnPDescriptionsTests: XCTestCase {
+    func testRecognizesMusiCardsNavidromeSourceWithoutAProbe() {
+        let navidrome = URL(string: "https://192.168.1.30/music/rest/stream.view?c=MusiCards&id=example&format=raw")!
+        let otherClient = URL(string: "http://192.168.1.30/rest/stream.view?c=Other&id=example&format=raw")!
+        let gerbera = URL(string: "http://192.168.1.30/media/object_id/12?c=MusiCards&id=example&format=raw")!
+        XCTAssertTrue(RendererRuntime.isMusiCardsNavidromeStream(navidrome))
+        XCTAssertFalse(RendererRuntime.isMusiCardsNavidromeStream(otherClient))
+        XCTAssertFalse(RendererRuntime.isMusiCardsNavidromeStream(gerbera))
+    }
+
     func testMediaRedirectUsesOnlyDestinationOrigin() throws {
         let stream = try XCTUnwrap(URL(string: "http://192.168.1.20:17502/mconnect/stream"))
         let response = try XCTUnwrap(HTTPURLResponse(

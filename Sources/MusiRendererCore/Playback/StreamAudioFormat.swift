@@ -9,10 +9,26 @@ public struct StreamAudioFormat: Codable, Equatable, Sendable {
     public let channels: UInt32?
     public let estimatedBitrateBps: Double?
 
-    static func read(from track: AVAssetTrack) async -> Self? {
+    static func sampleRate(at url: URL) async -> Double? {
+        let asset = AVURLAsset(url: url)
+        guard let tracks = try? await asset.loadTracks(withMediaType: .audio),
+              tracks.count == 1, let track = tracks.first,
+              let stream = await streamDescription(from: track) else { return nil }
+        return validSampleRate(stream.mSampleRate)
+    }
+
+    private static func streamDescription(from track: AVAssetTrack) async -> AudioStreamBasicDescription? {
         guard let descriptions = try? await track.load(.formatDescriptions),
-              descriptions.count == 1, let description = descriptions.first,
-              let stream = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee else { return nil }
+              descriptions.count == 1, let description = descriptions.first else { return nil }
+        return CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
+    }
+
+    private static func validSampleRate(_ rate: Double) -> Double? {
+        rate.isFinite && rate > 0 ? rate : nil
+    }
+
+    static func read(from track: AVAssetTrack) async -> Self? {
+        guard let stream = await streamDescription(from: track) else { return nil }
         let codec: String
         let depth: UInt32?
         switch stream.mFormatID {
@@ -41,7 +57,7 @@ public struct StreamAudioFormat: Codable, Equatable, Sendable {
         let bitrate = Double((try? await track.load(.estimatedDataRate)) ?? 0)
         return Self(
             codec: codec,
-            sampleRateHz: stream.mSampleRate.isFinite && stream.mSampleRate > 0 ? stream.mSampleRate : nil,
+            sampleRateHz: validSampleRate(stream.mSampleRate),
             bitDepth: depth,
             channels: stream.mChannelsPerFrame > 0 ? stream.mChannelsPerFrame : nil,
             estimatedBitrateBps: bitrate.isFinite && bitrate > 0 ? bitrate : nil
