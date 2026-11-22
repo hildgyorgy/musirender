@@ -1,22 +1,26 @@
-# MusiRender 0.2.0
+# MusiRender 0.2.0 (build 3)
 
 Requires an Apple silicon Mac running macOS 26 Tahoe or later. To install,
 drag MusiRender.app into Applications.
 
 ## What’s new
 
+- If the selected DAC disconnects, MusiRender switches to the macOS default
+  audio output and restores variable volume. Press Play to resume on that
+  output.
+- The app icon shows the black speaker on blue. The online menu-bar icon
+  uses the same high-contrast color pairing.
 - Select a dedicated audio device while keeping the macOS default output.
 - Enable fixed digital volume, automatic source sample-rate matching and
   optional exclusive access for the selected device.
 - See the source server and track format separately from the active device
   and its nominal sample rate. MusiCards streams from Navidrome now show the
   source name.
-- The menu-bar speaker turns blue when the renderer is online. Its tooltip
-  shows the current status.
+- The menu-bar icon tooltip shows the current renderer status.
 
 ## What we verified
 
-- All 28 automated tests passed for this release. The Release build is
+- All 29 automated tests passed for this release. The Release build is
   arm64 and declares macOS 26.0 as its minimum.
 - UPnP playback with MusiCards and with mconnect Player paired with Gerbera.
   The Tosca ALAC listening test confirmed seamless playback on the tested

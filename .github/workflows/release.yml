@@ -29,10 +29,22 @@ jobs:
       - name: Validate release tag
         shell: bash
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release tags must look like v0.2.0"
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-build\.([1-9][0-9]*))?$ ]]; then
+            echo "::error::Release tags must look like v0.2.0 or v0.2.0-build.3"
             exit 1
           fi
+          version="${BASH_REMATCH[1]}"
+          build_number="${BASH_REMATCH[3]}"
+          release_title="MusiRender $version"
+          if [[ -n "$build_number" ]]; then
+            release_title="$release_title (build $build_number)"
+          fi
+          {
+            printf 'RELEASE_VERSION=%s\n' "$version"
+            printf 'RELEASE_BUILD_NUMBER=%s\n' "$build_number"
+            printf 'RELEASE_TITLE=%s\n' "$release_title"
+            printf 'DMG_FILENAME=MusiRender-%s.dmg\n' "${RELEASE_TAG#v}"
+          } >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,7 +55,6 @@ jobs:
         shell: bash
         run: |
           [[ "$(uname -m)" == arm64 ]]
-          version="${RELEASE_TAG#v}"
           work="$RUNNER_TEMP/musirender-release"
           mkdir -p "$work"
           xcodebuild -version
@@ -53,13 +64,19 @@ jobs:
             -derivedDataPath "$work/build" CODE_SIGNING_ALLOWED=NO build
 
           app="$work/build/Build/Products/Release/MusiRender.app"
-          build_version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")
-          if [[ "$build_version" != "$version" ]]; then
-            echo "::error::Tag $RELEASE_TAG does not match app version $build_version"
+          plist="$app/Contents/Info.plist"
+          app_version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$plist")
+          if [[ "$app_version" != "$RELEASE_VERSION" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match app version $app_version"
+            exit 1
+          fi
+          app_build=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$plist")
+          if [[ -n "$RELEASE_BUILD_NUMBER" && "$RELEASE_BUILD_NUMBER" != "$app_build" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match app build number $app_build"
             exit 1
           fi
           [[ "$(lipo -archs "$app/Contents/MacOS/MusiRender")" == arm64 ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$app/Contents/Info.plist")" == 26.0 ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$plist")" == 26.0 ]]
 
       - name: Sign, notarize and verify the DMG
         shell: bash
@@ -76,7 +93,6 @@ jobs:
             fi
           done
 
-          version="${RELEASE_TAG#v}"
           work="$RUNNER_TEMP/musirender-release"
           keychain="$work/signing.keychain-db"
           certificate="$work/signing.p12"
@@ -135,15 +151,15 @@ jobs:
           mkdir "$image_root" "$mountpoint"
           ditto "$app" "$image_root/MusiRender.app"
           ln -s /Applications "$image_root/Applications"
-          notes="docs/RELEASE_$version.md"
+          notes="docs/RELEASE_${RELEASE_VERSION}.md"
           if [[ -f "$notes" ]]; then
             sed -E 's/^#{1,2} //; s/`//g' "$notes" > "$image_root/Release Notes.txt"
           else
-            printf 'MusiRender %s\n\nRequires Apple silicon and macOS 26 or later.\nDrag MusiRender.app into Applications.\n' "$version" > "$image_root/Release Notes.txt"
+            printf '%s\n\nRequires Apple silicon and macOS 26 or later.\nDrag MusiRender.app into Applications.\n' "$RELEASE_TITLE" > "$image_root/Release Notes.txt"
           fi
 
-          dmg="$work/MusiRender-$version.dmg"
-          hdiutil create -quiet -volname "MusiRender $version" -fs HFS+ -format UDZO -srcfolder "$image_root" "$dmg"
+          dmg="$work/$DMG_FILENAME"
+          hdiutil create -quiet -volname "$RELEASE_TITLE" -fs HFS+ -format UDZO -srcfolder "$image_root" "$dmg"
           codesign --timestamp --keychain "$keychain" --sign "$identity" \
             --identifier org.musirenderer.MusiRender.diskimage "$dmg"
           notarize "$dmg" "$work/dmg-notary.json"
@@ -163,13 +179,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${RELEASE_TAG#v}"
-          dmg="$RUNNER_TEMP/musirender-release/MusiRender-$version.dmg"
-          notes="docs/RELEASE_$version.md"
+          dmg="$RUNNER_TEMP/musirender-release/$DMG_FILENAME"
+          notes="docs/RELEASE_${RELEASE_VERSION}.md"
           if [[ -f "$notes" ]]; then
             release_notes=(--notes-file "$notes")
           else
             release_notes=(--generate-notes)
           fi
+          release_options=()
+          if [[ -n "$RELEASE_BUILD_NUMBER" ]]; then
+            release_options+=(--latest)
+          fi
           gh release create "$RELEASE_TAG" "$dmg" --verify-tag \
-            --title "MusiRender $version" "${release_notes[@]}"
+            --title "$RELEASE_TITLE" "${release_notes[@]}" "${release_options[@]}"

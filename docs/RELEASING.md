@@ -50,3 +50,9 @@ fails because a secret was missing or an Apple service was unavailable, fix
 the cause and rerun it in Actions. The workflow preserves existing releases.
 If the workflow itself needs a fix, push the fix to `main` and use **Run
 workflow** with the existing version tag to build the tagged source again.
+
+To publish a refreshed build of the same version, increase
+`CURRENT_PROJECT_VERSION` and append `-build.<number>` to the tag, for
+example `v0.2.0-build.3`. The app version remains 0.2.0, and the workflow
+checks the build number against the suffix and marks the refreshed release
+as latest.
