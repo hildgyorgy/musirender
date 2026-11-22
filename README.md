@@ -29,7 +29,8 @@ playback is stopped. The **Output** line includes the device’s nominal sample
 rate when Core Audio reports it. For a selected device, **Fixed digital volume
 (100%)** leaves listening volume to the DAC or amplifier and locks the
 renderer’s volume and mute controls, including UPnP commands. If the selected
-device disconnects, playback stops and requires an explicit Play to resume.
+device disconnects, the renderer returns to System Default and restores
+variable volume. An explicit Play resumes playback on the system output.
 **Match source sample rate** is optional for a selected device. The renderer
 waits for Core Audio to confirm the new rate before playing. Tracks whose
 sample rates match can still be queued for gapless playback. Tracks that

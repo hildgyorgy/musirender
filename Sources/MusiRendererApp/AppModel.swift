@@ -80,9 +80,9 @@ final class AppModel: ObservableObject {
             self?.refreshAudioOutputs()
         }
         selectedOutputUID = defaults.string(forKey: "audioOutputUID")
-        refreshAudioOutputs()
         do {
-            try runtime.playback.selectOutput(uid: selectedOutputUID, available: activeOutput != nil)
+            try runtime.playback.selectOutput(uid: selectedOutputUID, available: false)
+            refreshAudioOutputs()
             if selectedOutputUID != nil, defaults.bool(forKey: "fixedAudioVolume") {
                 try runtime.playback.setFixedVolume(true)
                 fixedVolume = true
@@ -205,15 +205,7 @@ final class AppModel: ObservableObject {
         guard uid != selectedOutputUID else { return }
         do {
             try runtime.playback.selectOutput(uid: uid, available: audioOutputs.contains { $0.uid == uid })
-            selectedOutputUID = uid
-            fixedVolume = false
-            matchesSourceSampleRate = false
-            usesExclusiveOutput = false
-            UserDefaults.standard.set(uid, forKey: "audioOutputUID")
-            UserDefaults.standard.removeObject(forKey: "fixedAudioVolume")
-            UserDefaults.standard.removeObject(forKey: "matchSourceSampleRate")
-            UserDefaults.standard.removeObject(forKey: "exclusiveAudioOutput")
-            outputError = nil
+            storeAudioOutputSelection(uid)
             refreshAudioOutputs()
             refreshPlayback()
         } catch PlaybackCoordinator.PlaybackError.exclusiveOutputReleaseFailed {
@@ -221,6 +213,18 @@ final class AppModel: ObservableObject {
         } catch {
             outputError = "Stop playback before changing the audio output."
         }
+    }
+
+    private func storeAudioOutputSelection(_ uid: String?) {
+        selectedOutputUID = uid
+        fixedVolume = false
+        matchesSourceSampleRate = false
+        usesExclusiveOutput = false
+        UserDefaults.standard.set(uid, forKey: "audioOutputUID")
+        UserDefaults.standard.removeObject(forKey: "fixedAudioVolume")
+        UserDefaults.standard.removeObject(forKey: "matchSourceSampleRate")
+        UserDefaults.standard.removeObject(forKey: "exclusiveAudioOutput")
+        outputError = nil
     }
 
     func setFixedVolume(_ enabled: Bool) {
@@ -266,11 +270,16 @@ final class AppModel: ObservableObject {
     private func refreshAudioOutputs() {
         guard let devices = AudioOutputs.list() else { return }
         if audioOutputs != devices { audioOutputs = devices }
-        let output: AudioOutput?
+        var output: AudioOutput?
+        var switchedToSystemDefault = false
         if let uid = selectedOutputUID {
             output = devices.first { $0.uid == uid }
-            runtime.playback.updateOutputAvailability(uid: uid, available: output != nil)
-        } else {
+            if runtime.playback.updateOutputAvailability(uid: uid, available: output != nil) {
+                storeAudioOutputSelection(nil)
+                switchedToSystemDefault = true
+            }
+        }
+        if selectedOutputUID == nil {
             let id = AudioOutputs.defaultDeviceID
             output = devices.first { $0.id == id }
         }
@@ -278,6 +287,7 @@ final class AppModel: ObservableObject {
         if activeOutput != output { activeOutput = output }
         let rate = output?.nominalSampleRate
         if outputSampleRate != rate { outputSampleRate = rate }
+        if switchedToSystemDefault { refreshPlayback() }
     }
 
     func togglePlayback() {

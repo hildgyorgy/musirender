@@ -50,7 +50,7 @@ private final class MenuBarController: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         let status = isOnline ? "Online" : "Offline"
         let size = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
-        let configuration = isOnline ? size.applying(.init(paletteColors: [.systemBlue])) : size
+        let configuration = isOnline ? size.applying(.init(paletteColors: [.systemBlue, .black])) : size
         let image = NSImage(systemSymbolName: "hifispeaker.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration)
         image?.isTemplate = !isOnline

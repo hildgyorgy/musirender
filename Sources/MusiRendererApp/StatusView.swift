@@ -152,7 +152,9 @@ struct StatusView: View {
     }
 
     private var outputDetails: String {
-        guard let name = model.activeOutput?.name else { return "Unavailable" }
+        guard let name = model.activeOutput?.name else {
+            return model.selectedOutputUID == nil ? "System Default" : "Unavailable"
+        }
         var details = [name]
         if let rate = model.outputSampleRate { details.append("\((rate / 1000).formatted()) kHz") }
         if model.renderer.exclusiveOutputActive { details.append("Exclusive") }

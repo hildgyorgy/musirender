@@ -126,7 +126,7 @@ final class SOAPActionHandlerTests: XCTestCase {
         XCTFail("Playback did not reach the expected state")
     }
 
-    func testDedicatedOutputPausesOnDisconnectAndDoesNotResumeAutomatically() throws {
+    func testDisconnectedDACFallsBackToSystemOutputAndRestoresVariableVolume() throws {
         let player = FakeAudioPlayer()
         let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
         try playback.selectOutput(uid: "test-dac", available: false)
@@ -134,16 +134,31 @@ final class SOAPActionHandlerTests: XCTestCase {
         XCTAssertThrowsError(try playback.play())
         XCTAssertEqual(player.playCalls, 0)
         playback.updateOutputAvailability(uid: "test-dac", available: true)
+        playback.setVolume(35)
+        try playback.setFixedVolume(true)
         try playback.play()
         XCTAssertThrowsError(try playback.selectOutput(uid: nil, available: true))
         XCTAssertThrowsError(try playback.setFixedVolume(true))
-        playback.updateOutputAvailability(uid: "test-dac", available: false)
+        XCTAssertTrue(playback.updateOutputAvailability(uid: "test-dac", available: false))
         XCTAssertEqual(playback.currentSnapshot().transportState, .stopped)
-        XCTAssertEqual(player.outputUID, "test-dac")
-        playback.updateOutputAvailability(uid: "test-dac", available: true)
+        XCTAssertNil(player.outputUID)
+        XCTAssertEqual(player.volume, 0.35)
+        XCTAssertFalse(playback.updateOutputAvailability(uid: "test-dac", available: true))
+        XCTAssertNil(player.outputUID)
         XCTAssertEqual(player.playCalls, 1)
         try playback.play()
         XCTAssertEqual(player.playCalls, 2)
+    }
+
+    func testSavedDACMissingAtStartupUsesSystemOutput() throws {
+        let player = FakeAudioPlayer()
+        let playback = PlaybackCoordinator(state: RendererState(), player: player, log: DiagnosticLog())
+        try playback.selectOutput(uid: "missing-dac", available: false)
+        XCTAssertTrue(playback.updateOutputAvailability(uid: "missing-dac", available: false))
+        XCTAssertNil(player.outputUID)
+        try playback.setURI("http://example.test/track", metadata: "")
+        try playback.play()
+        XCTAssertEqual(player.playCalls, 1)
     }
 
     func testFixedVolumeIgnoresRenderingControlAndClearsOnRouteChange() throws {

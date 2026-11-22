@@ -458,33 +458,54 @@ public final class PlaybackCoordinator: @unchecked Sendable {
     public func selectOutput(uid: String?, available: Bool) throws {
         try queue.sync {
             try requireStopped()
-            if outputDeviceUID != uid {
-                try clearExclusiveOutputControl()
-                changeSampleRateControl(nil)
-                restoreVariableRendering()
-                player.setOutputDevice(uid: uid)
-                outputDeviceUID = uid
-            }
-            outputAvailable = uid == nil || available
+            try configureOutput(uid: uid, available: available)
         }
     }
 
-    public func updateOutputAvailability(uid: String, available: Bool) {
+    private func configureOutput(uid: String?, available: Bool) throws {
+        if outputDeviceUID != uid {
+            try clearExclusiveOutputControl()
+            changeSampleRateControl(nil)
+            restoreVariableRendering()
+            player.setOutputDevice(uid: uid)
+            outputDeviceUID = uid
+        }
+        outputAvailable = uid == nil || available
+    }
+
+    /// Returns true when the selected device disappeared and the player switched to System Default.
+    @discardableResult
+    public func updateOutputAvailability(uid: String, available: Bool) -> Bool {
         queue.sync {
-            guard uid == outputDeviceUID, available != outputAvailable else { return }
-            outputAvailable = available
-            if available { player.setOutputDevice(uid: uid) }
-            guard !available else { return }
-            guard requestedState == .playing || requestedState == .pausedPlayback else {
-                releaseExclusiveOutput()
-                return
+            guard uid == outputDeviceUID else { return false }
+            if available {
+                if !outputAvailable { player.setOutputDevice(uid: uid) }
+                outputAvailable = true
+                return false
             }
+
+            reconcileQueue()
+            outputAvailable = false
             cancelRatePreparation()
-            player.pause()
-            releaseExclusiveOutput()
-            requestedState = .stopped
-            state.update { $0.transportState = .stopped; refreshTimes(&$0) }
-            log.record("Playback stopped because the selected output disconnected", level: .warning)
+            if requestedState == .playing || requestedState == .pausedPlayback {
+                player.pause()
+                requestedState = .stopped
+                state.update { $0.transportState = .stopped; refreshTimes(&$0) }
+            }
+            do {
+                try configureOutput(uid: nil, available: true)
+                state.update {
+                    if $0.outputPlaybackError != nil {
+                        $0.outputPlaybackError = nil
+                        $0.transportStatus = "OK"
+                    }
+                }
+                log.record("Selected output disconnected. Switched to the system default.", level: .warning)
+                return true
+            } catch {
+                log.record("Could not switch to the system default audio output", level: .error)
+                return false
+            }
         }
     }
 
